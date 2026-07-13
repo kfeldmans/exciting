@@ -1,0 +1,21 @@
+# 🗺️ Quantum Chemistry Codebase Map & Survival Guide
+
+> **Purpose:** This is a living document to track the architecture, data structures, and algorithmic implementations of this legacy Fortran codebase.
+
+---
+
+## 🚀 Quick Reference & Core Modules
+
+! Some initializations
+      call initatomcounters()
+      call initlattice()
+      call initlibxc()
+      call initldapu
+      call initsolver()
+      call readspeciesxml()
+      call scl_xml_out_create()
+
+## 📓 Daily Log
+
+* **2026-06-02:**
+* **2026-06-01:** File created.
