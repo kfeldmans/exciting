@@ -263,12 +263,12 @@ contains
     lm1 = idxlm(3,2)
     lm2 = idxlm(2,-1)
     lm3 = idxlm(3,3)
-    write(*,*) "The precomputed G: ", gntyyy(lm2,lm3,lm1)
+    write(*,*) "The precomputed G: ", gntyyy(lm3,lm2,lm1)
     ! The last parameter in gntyyy is for the complex conjugated sperical harmonic.
     ! We must have the sum of first two m's equal to last m.
     !write(*,*) "Gaunt coeffs: ", gntyyy(idxlm(1,1),idxlm(1,1),idxlm(2,2))
-    write(*,*) "Stop in mod_Feldmans.f90 after checking Gaunt coeffs"
-    stop
+    !write(*,*) "Stop in mod_Feldmans.f90 after checking Gaunt coeffs"
+    !stop
 
 
 #define T413094738947394723
@@ -558,22 +558,20 @@ contains
             ias = idxas(ia, is)
             lm = idxlm(l, m)
             do l1 = 0, lmax
-              do m1 = -l1, l1
-                lm1 = idxlm(l1, m1)
-                do l2 = 0, lmax
-                  do m2 = -l2, l2
-                    lm2 = idxlm(l2, m2)
-                    !if (abs(gntyyy(lm1, lm, lm2)) < 1e-14_dp) cycle  ! skip zeros
-                    do ist1 = 1, nstfv
-                      do ist2 = 1, nstfv
-                        do ibs1 = 1, n
-                          do ibs2 = 1, n
-                            q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
-                              + cmplx(gntyyy(lm, lm2, lm1)) &
-                              * B_is(ibs1, lm1, ist1, ias) &
-                              * conjg(B_is(ibs2, lm2, ist2, ias)) &
-                              * cmplx(I_Llsls(ibs1, ibs2, l1, l2, l))
-                          end do
+              do l2 = abs(l-l1),min(lmax,l+l1), 2
+                do m1 = max(-l1,m-l2), min(l1,m+l2)
+                  lm1 = idxlm(l1, m1)
+                  lm2 = idxlm(l2, m1-m)
+                  !if (abs(gntyyy(lm1, lm, lm2)) < 1e-14_dp) cycle  ! skip zeros
+                  do ist1 = 1, nstfv
+                    do ist2 = 1, nstfv
+                      do ibs1 = 1, n
+                        do ibs2 = 1, n
+                          q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
+                            + cmplx(gntyyy(lm, lm2, lm1)) &
+                            * B_is(ibs1, lm1, ist1, ias) &
+                            * conjg(B_is(ibs2, lm2, ist2, ias)) &
+                            * cmplx(I_Llsls(ibs1, ibs2, l1, l2, l))
                         end do
                       end do
                     end do
@@ -587,6 +585,25 @@ contains
     end do
 !$OMP END PARALLEL DO
 #endif new_loop_1312312
+
+!#define loop_optimization_1_43141983471283
+#ifdef loop_optimization_1_43141983471283
+
+    do is= 1,nspecies
+      do ia = 1,natoms(is)
+        ias = idxas(ia,is)
+        do m = 0,lmax ! we handle positive and negative case seperately
+          ! case where m >= 0
+          do m2 = -lmax,lmax-m
+            m1 = m+m2
+            ! now we need to loop over all triples of (l,l1,l2) that have non-zero gaunt at (lm,lm1,lm2)
+
+          end do !m2
+        end do !m loop over all magnetic moments
+      end do !ia
+    end do !is
+#endif loop_optimization_1_43141983471283
+
     write(*,*) "Maximum abs of multipoles: ", maxval(abs(q_nnLM_is))
 
     do ist1 = 1,nstfv
