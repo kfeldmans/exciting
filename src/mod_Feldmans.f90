@@ -5,17 +5,35 @@ module mod_Feldmans
   use mod_sbessel, only: sbessel, sbessel_vec
   use mod_eigensystem, only: WFType
   use mod_kpointset, only: Gk_set
-  use modgw, only: Gkqset, Gkset
+  use modgw, only: Gkqset, Gkset, kqset, kset
   use mod_Basis1D
   use mod_lattice, only: omega
   implicit none
   private
-  public :: hello, testing, testing_calc, set_wf_planewaves
+  public :: hello, testing, testing_calc, set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld
 
   ! Ripped from Fortran stdlib
   real(dp), parameter :: tolerance = 4._dp*epsilon(1._dp)
   integer, parameter :: newton_iters = 100
+
+  ! Global values to be accessed for computations in mod_Feldmans
+  Type(Basis1D), allocatable :: gSVDb_vec(:)
+  real(dp), allocatable :: gI_Llsls(:,:,:,:,:)
+  complex(dp), allocatable :: gA(:,:,:)
+
 contains
+
+  subroutine initialise_mod_Feld()
+    !! Precomputes SVD basis of sBessel functions,
+    !! integrals between basis functions, Gaunt coefficients,
+    !! computes expansions of used sBessel functions into the SVD basis,
+    !! precomputes coefficients for expansion of radial parts of WF harmonic expansions into SVD basis.
+  end subroutine initialise_mod_Feld
+
+
+  subroutine finalise_mod_Feld()
+    !! Deallocates memory allocated by initialise_mod_Feld.
+  end subroutine finalise_mod_Feld
 
   ! Ripped from fortran standard library
 
@@ -181,6 +199,236 @@ contains
     !wf%gk(3,1) = 3._dp
   end subroutine set_wf_planewaves
 
+  subroutine testing_calc_2(ikp,wf1)
+    !! Calculate multipoles as in testing_calc, but works for multiple k-points.
+    integer, intent(in) :: ikp ! The reduced k-vector index for the wf1
+    Type(WFType), intent(in) :: wf1
+    Type(WFType) :: wf2
+    real(dp), parameter :: minx = 0._dp
+    real(dp), parameter :: maxx = 1._dp
+    real(dp), parameter :: minG = 0.00000001_dp
+    real(dp), parameter :: maxG = 10._dp
+    integer(i32), parameter :: Nx = 6000
+    integer(i32), parameter :: NG = 500
+    real(dp) :: xgrid(Nx)
+    real(dp) :: xweights(Nx)
+    real(dp) :: Ggrid(NG)
+    integer(i32), parameter :: n = 15 !! How many eigenvals & eigenfuncs to keep for representation
+    integer(i32), parameter :: lmax = 8 !! Maximum order for spherical Bessel functions
+    integer(i32), parameter :: L_max = 8 !! Maximum angular momentum to calculate integrals for
+    Type(Basis1D) :: SVDb_vec(0:lmax) !! Vector of bases for each order of sBessel functions.
+    real(dp), allocatable :: work(:) ! Work array for blas/lapack
+    real(dp), allocatable :: A_tmp(:,:) ! Helper array
+    integer :: idxg, lwork, igk,ik, jk,l, iq, ias, m, lm, ist,jkp, ibs, ll, i,j,l1,l2
+    complex(dp), allocatable :: ylmgk(:,:,:) ! Spherical harmonics for reduced k-vectors
+    real(dp) :: jlxG(0:lmax,Nx,NG)
+    real(dp), allocatable :: I_Llsls(:,:,:,:,:)
+    real(dp), allocatable :: jlxg_rayl(:,:,:,:) ! sBessel function values for reduced k+G vector lengths
+    real(dp), allocatable :: jxg(:,:)
+    real(dp), allocatable :: svdfac(:,:,:,:)
+    real(dp) :: xpow(Nx)
+    complex(dp), allocatable :: A(:,:,:,:,:)
+    complex(dp), allocatable :: B(:,:,:,:,:)
+    real(dp), allocatable :: U_l_scaled(:,:,:)
+    write(*,*) "Started testing_calc_2"
+    ! Determine the non-reduced k-point index of the given wf1
+    ik = kset%ikp2ik(ikp)
+    ! Get radial grid to calculate sBessel functions on.
+    call gauss_legendre(xgrid,xweights, interval=[minx,maxx])
+    ! G-grid is just uniform.
+    Ggrid = linspace(minG,maxG,NG)
+    ! Calculating sBessel functions of all orders on the grids.
+    do idxg = 1,NG
+      call sbessel_vec(lmax,maxval(rmt(1:nspecies))*xgrid*Ggrid(idxg), jlxG(:,:,idxg))
+    end do
+
+
+    write(*,*) "maxval in kset%ik2ikp: ", maxval(kset%ik2ikp)
+    write(*,*) "length of kset%ik2ikp: ", size(kset%ik2ikp)
+    ! Generate a basis for each order of sBessel functions
+    do l=0,lmax
+      A_tmp = jlxG(l,:,:)
+      lwork = -1
+      call genSVDBasis(Nx,A_tmp,xweights,n,xgrid,work,lwork,SVDb_vec(l))
+    end do
+    deallocate(A_tmp)
+
+    ! Make sure Gaunt coefficients are computed
+    if (.not. allocated(gntyyy)) then
+      call gengntyyy
+    end if
+
+    ! Calculate spherical harmonics
+    allocate(ylmgk(lmmaxvr,maxval(Gkqset%ngk),nkpt))
+    write(*,*) "# of nkpt: ", nkpt
+    do jkp = 1, nkpt
+      jk = kset%ikp2ik(jkp)
+      do igk = 1, Gkqset%ngk(1,jk) ! loop over all G+k indices for the fixed k.
+        call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:,igk,1,jk),ylmgk(:,igk,jkp))
+      end do
+    end do
+
+    ! Calculate sBessel functions used in the Rayleigh expansion
+
+    allocate(jlxg_rayl(0:lmax,Nx,maxval(Gkqset%ngk), nkpt))
+    do jkp = 1, nkpt
+      jk = kset%ikp2ik(jkp)
+      do igk=1,Gkqset%ngk(1,jk)
+        call sbessel_vec(lmax,xgrid*Gkqset%gkc(igk,1,jk)*maxval(rmt(1:nspecies)),jlxg_rayl(:,:,igk,jkp))
+      end do
+    end do
+
+    ! Express sBessel functions in SVD basis.
+
+    allocate(svdfac(n,maxval(Gkqset%ngk),0:lmax,nkpt))
+    do jkp = 1, nkpt
+      jk = kset%ikp2ik(jkp)
+      do l=0,lmax
+        jxg = jlxg_rayl(l,:,:,jkp)
+        do igk= 1,Gkqset%ngk(1,jk)
+          svdfac(:,igk,l,jkp) = sqrt(maxval(rmt)) * xToB(SVDb_vec(l),jxg(:,igk))
+        end do
+      end do
+    end do
+    deallocate(jlxg_rayl)
+
+    ! Calculate the A coefficients
+
+    call WFInit(wf2)
+    allocate(A(nstfv,lmmaxvr,maxval(Gkqset%ngk),nkpt,natmtot))
+    do iq = 1, kqset%nkpt ! looping over q vectors
+
+      jk = kqset%kqid(ik,iq) ! determined the k-vector index for wf2
+      jkp = kset%ik2ikp(jk)
+      call genWF(jk, wf2)
+
+      do ias = 1, natmtot
+        do igk = 1,Gkqset%ngk(1,jk)
+          do l = 0,lmax
+            do m = -l,l
+              lm = idxlm(l,m)
+              do ist = 1, nstfv
+                A(ist,lm,igk,jkp,ias) =  wf2%gk(igk,ist) * fourpi * zil(l) * Gkqset%sfacgk(igk,ias,1,jk) * conjg(ylmgk(lm,igk,jkp))
+              end do
+            end do
+          end do
+        end do
+      end do
+
+    end do
+    call WFRelease(wf2)
+    ! Calculate the B coefficients
+
+    allocate(B(n,lmmaxvr,nstfv,nkpt,natmtot))
+    B =cmplx(0._dp, kind=dp)
+    !B(ibs,lm,ist,ias)
+
+    do iq = 1, kqset%nkpt ! looping over q vectors
+
+      jk = kqset%kqid(ik,iq) ! determined the k-vector index for wf2
+      jkp = kset%ik2ikp(jk)
+
+      do ias = 1, natmtot
+        do igk = 1,Gkqset%ngk(1,jk)
+          do l = 0,lmax
+            do m = -l,l
+              lm = idxlm(l,m)
+              do ist = 1, nstfv
+                do ibs = 1,n
+                  B(ibs,lm,ist,jkp,ias) = B(ibs,lm,ist,jkp,ias) + A(ist,lm,igk,jkp,ias) * svdfac(ibs,igk,l,jkp)
+                end do
+              end do
+            end do
+          end do
+        end do
+      end do
+
+    end do
+    deallocate(A)
+
+    B = B / sqrt(omega)
+
+    ! Calculate the integrals between the basis functions
+
+    allocate(I_Llsls(n,n,0:lmax,0:lmax,0:L_max))
+
+
+
+    allocate(U_l_scaled(Nx,n,0:lmax))
+    do ll=0, L_max
+
+      xpow = sqrt((SVDb_vec(1)%xgrid*maxval(rmt(1:nspecies)))**(ll+2)*SVDb_vec(1)%weights)
+      !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(i,j)
+      do j = 0, lmax
+        do i = 1, n
+          U_l_scaled(:, i, j) = SVDb_vec(j)%basis(:,i)*xpow
+        end do
+      end do
+      !$OMP END PARALLEL DO
+      do l1 = 0, lmax
+        do l2=0,lmax
+          call dgemm('T', 'N', n, n, Nx, 1._dp, &
+            U_l_scaled(:, :, l1), Nx, &
+            U_l_scaled(:, :, l2), Nx, &
+            0._dp, I_Llsls(:, :, l1, l2, ll), n)
+        end do
+      end do
+    end do
+    deallocate(U_l_scaled)
+
+    write(*,*) "Maxval of I_Llsls in testing_calc_2: ", maxval(abs(I_Llsls))
+    deallocate(I_Llsls)
+    deallocate(B)
+  end subroutine testing_calc_2
+
+  subroutine generateBesselBases(SVDb_vec)
+    !! generate an svd basis for sBessel functions up to order lmax
+    integer, parameter :: lmax = 8
+    Type(Basis1D), intent(out) :: SVDb_vec(0:lmax) !! Vector of bases for each order of sBessel functions.
+    real(dp), parameter :: minx = 0._dp
+    real(dp), parameter :: maxx = 1._dp
+    real(dp), parameter :: minG = 0.00001_dp
+    real(dp), parameter :: maxG = 4._dp
+    integer, parameter :: Nx = 4000
+    integer, parameter :: NG = 1000
+    integer, parameter :: n = 12 !! How many eigenfuncs to keep for representation
+    real(dp), allocatable :: work(:) ! Work array for blas/lapack
+    real(dp), allocatable :: A_tmp(:,:) ! Helper array
+    real(dp), allocatable :: jlxG(:,:,:)
+    real(dp) :: xgrid(Nx)
+    real(dp) :: xweights(Nx)
+    real(dp) :: Ggrid(NG)
+    integer :: i,l, lwork
+
+    ! Generating grids to calculate on
+    xgrid = linspace(minx, maxx, Nx)
+    call gauss_legendre(xgrid, xweights, interval=[minx, maxx])
+    Ggrid = linspace(minG, maxG, NG)
+
+    !Calculating the sBessel functions on the grid
+    allocate(jlxG(0:lmax,Nx, NG))
+    !$OMP PARALLEL DO COLLAPSE(1) PRIVATE(i)
+    do i = 1, NG
+      call sbessel_vec(lmax, xgrid*Ggrid(i), jlxG(:, :, i))
+    end do
+    !$OMP END PARALLEL DO
+
+    ! Generate a basis for each order of sBessel functions
+    do l=0,lmax
+      A_tmp = jlxG(l,:,:)
+      lwork = -1
+      call genSVDBasis(Nx,A_tmp,xweights,n,xgrid,work,lwork,SVDb_vec(l))
+    end do
+    deallocate(jlxG)
+    deallocate(A_tmp)
+  end subroutine generateBesselBases
+
+  subroutine expressSBesselsInBases()
+  end subroutine expressSBesselsInBases
+
+
+
+
   subroutine testing_calc(wf,q_nnLM_is)
     Type(WFType), intent(in) :: wf
     complex(dp), allocatable, intent(out) :: q_nnLM_is(:,:,:, :) ! q_nn_LM_is(n,n',LM, is) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
@@ -207,7 +455,7 @@ contains
     complex(dp), allocatable :: ylmgk(:,:) ! ylmgk(lmmaxvr,Gkqset%ngk(1,1))
     integer :: lwork
     real(dp) :: xpow(Nx)
-    integer :: i,j,l,ll,l1,l2,idxg,igk,m,m1,m2,lm,ibs,ibs1,ibs2,ist,ist1,ist2,is,ias,ia, lm1,lm2,lm3
+    integer :: i,j,l,ll,l1,l2,idxg,igk,m,m1,m2,lm,ibs,ibs1,ibs2,ist,ist1,ist2,is,ias,ia, lm1,lm2,lm3, ik
     real(dp), allocatable :: svdfac(:,:,:) ! Expansion coefficients of spherical Bessel functions in  SVD basis for angular moments, for used lengths of G vectors.
     real(dp), allocatable :: jlxg_rayl(:,:,:) !
     real(dp), allocatable :: jxg(:,:)
@@ -255,10 +503,11 @@ contains
       call genSVDBasis(Nx,A,weightsx,n,xgrid,work,lwork,SVDb_vec(l))
     end do
 
-    call testing_non_zero_gaunt_count
-
-    call gengntyyy
-    write(*,*) "The Gaunt coefficient array is allocated: ", allocated(gntyyy)
+    !call testing_non_zero_gaunt_count
+    if (.not. allocated(gntyyy)) then
+      call gengntyyy
+    end if
+    !write(*,*) "The Gaunt coefficient array is allocated: ", allocated(gntyyy)
 
     lm1 = idxlm(3,2)
     lm2 = idxlm(2,-1)
@@ -271,7 +520,7 @@ contains
     !stop
 
 
-#define T413094738947394723
+!#define T413094738947394723
 #ifdef T413094738947394723
     ! Checking the basis
     write(*,*) "The sum of integration weights of basis: ", sum(SVDb_vec(2)%weights)
@@ -282,7 +531,7 @@ contains
     write(*,*) "The inner product of two basis functions under the weights: ", sum(SVDb_vec(3)%basis(:,1)*SVDb_vec(3)%basis(:,6)*SVDb_vec(3)%weights)
 #endif T413094738947394723
     ! Checking the correctness of the bases and projection functions.
-#define SVDProjCheck
+!#define SVDProjCheck
 #ifdef SVDProjCheck
     A = jlxG(3,:,:)
     koefs = xToB(SVDb_vec(3), A(:,400))
@@ -604,6 +853,8 @@ contains
     end do !is
 #endif loop_optimization_1_43141983471283
 
+!#define print_multipole_results_12313213132423151
+#ifdef print_multipole_results_12313213132423151
     write(*,*) "Maximum abs of multipoles: ", maxval(abs(q_nnLM_is))
 
     do ist1 = 1,nstfv
@@ -628,17 +879,14 @@ contains
         endif
       end do
     end do
+#endif print_multipole_results_12313213132423151
+
     write(*,*) "Finished calculation of multipoles"
 #endif TEST_CALC_MULTIPOLES_VIA_B_KOEFS
 
     write(*,*) "Testing calc finished"
 
   end subroutine testing_calc
-
-
-
-
-
 
 
 
@@ -837,7 +1085,7 @@ contains
 
 
     !---Get the projection coefficients of Bessel functions
-    ! Pagaidām sarēķinām tikai pirmajam k vektoram
+    ! Pagaidām sar��ķinām tikai pirmajam k vektoram
     ! svdfac(n,ngk)
 
     allocate(svdfac(n,Gkqset%ngk(1,1),0:lmax))
@@ -954,10 +1202,10 @@ contains
     !-----------------------------------------------------------------------
 
 
-    ! ! Paskatāmies, vai ir jau kaut kas sarēķināts dotās viļņa f-as izvirzījumam.
+    ! ! Paskatāmies, vai ir jau kaut kas sarē��ināts dotās viļņa f-as izvirzījumam.
     ! write(*,*) "Is allocated wf%mtrlm:", allocated(wf%mtrlm)
 
-    ! ! sarēķinām to pašu vi��ņu funckijas izvirzījumu ar formulu:
+    ! ! sarēķinām to pašu vi����u funckijas izvirzījumu ar formulu:
     ! ! psi_nlm(r) = SUM_G psi_nG * 4 * Pi * i**l * j_l(G*r) * Y_lm(G_phth)
     ! write(*,*) "ngk = ", ngk(1,1)
     ! allocate(Psi_lmn(Nx,lmmaxvr,nstfv))

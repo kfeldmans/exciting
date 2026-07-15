@@ -19,7 +19,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
   use poterf
 
-  use mod_Feldmans, only: hello, testing, testing_calc, set_wf_planewaves
+  use mod_Feldmans, only: hello, testing, testing_calc, set_wf_planewaves, testing_calc_2
 
   Implicit None
 ! arguments
@@ -97,7 +97,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   Allocate (zvclmt(lmmaxvr, nrcmtmax, natmtot, nstsv)) !dealoc
   !Allocate (zwfir(ngkmax))
 
-  !write(*,*) "erfcapprox=",input%groundstate%hybrid%erfcapprox
+  !!write(*,*) "erfcapprox=",input%groundstate%hybrid%erfcapprox
   !write(*,*) "rpseudo=",input%groundstate%hybrid%rpseudo
   rpseudo = input%groundstate%hybrid%rpseudo
   lmaxvr = input%groundstate%lmaxvr
@@ -125,8 +125,11 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   !call testing(wf1)
 
   ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
-  call set_wf_planewaves(wf1)
+  !call set_wf_planewaves(wf1)
   ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
+  call testing_calc_2(ikp,wf1)
+  write(*,*) "Have exited testing_calc_2"
+  !stop
   call testing_calc(wf1, q_nnLM_is)
 
   call WFInit(wf2)
@@ -277,8 +280,8 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
     !--------------------
     ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
-    call set_wf_planewaves(wf2)
-    write(*,*) "The volume of unit element: ", omega
+    !call set_wf_planewaves(wf2)
+    !write(*,*) "The volume of unit element: ", omega
     ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
     !----------------
     call timesec(tb)
@@ -344,7 +347,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     Allocate (vxpsiirtmp(ngrtot))
     Allocate (vxpsigktmp(ngkmax))
 
-    Do ist2 = 1,1!1, nomax!
+    Do ist2 = 1, nomax!1,1!!
 
       call timesec(tc)
       wf2ir(:) = 0.d0
@@ -357,7 +360,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       call timesec(td)
       time_fft = time_fft + td - tc
 !$OMP DO SCHEDULE(DYNAMIC)
-      Do ist3 = 1,1!1, nstfv!
+      Do ist3 = 1, nstfv!1,1!!
         vxpsiirtmp(:) = 0.d0
         call timesec(tc)
         wf1ir(:) = 0.d0
@@ -435,7 +438,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 !                     potir=potir0
 !                  endif
           !print '("OLD: For pair ", I0, ", ", I0, " obtained value ", F0.3)', ist2, ist3, maxval(abs(qlmir))
-#define TESTING_PRINTMULTIPOLECOMAPRISON_312312
+!#define TESTING_PRINTMULTIPOLECOMAPRISON_312312
 #ifdef TESTING_PRINTMULTIPOLECOMAPRISON_312312
           do is = 1, nspecies
             do ia = 1, natoms(is)
@@ -454,7 +457,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
           write(*,*) "FockExchange: species radii: ", rmt
 #endif TESTING_PRINTMULTIPOLECOMAPRISON_312312
 
-#define TESTING_MULTIPOLE_CALCULATION_8113211203141
+!#define TESTING_MULTIPOLE_CALCULATION_8113211203141
 #ifdef TESTING_MULTIPOLE_CALCULATION_8113211203141
           do is = 1, nspecies
             do ia = 1, natoms(is)
@@ -742,10 +745,12 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   call WFRelease(wf1)
   call WFRelease(wf2)
   call WFRelease(prod)
-  deallocate(q_nnLM_is)
-  write(*,*)"FockExchange.f90 stop"
+  if (allocated(q_nnLM_is)) then
+    deallocate(q_nnLM_is)
+  end if
 
-  stop
+  !write(*,*)"FockExchange.f90 stop"
+  !stop
   Return
 end subroutine FockExchange
 !EOC
