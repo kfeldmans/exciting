@@ -19,7 +19,9 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
   use poterf
 
-  use mod_Feldmans, only: hello, testing, testing_calc, set_wf_planewaves, testing_calc_2
+  use mod_Feldmans, only: calc_multipoles, hello, testing, &
+    testing_calc, set_wf_planewaves, &
+    testing_calc_2, psi_sphr_SVDb
 
   Implicit None
 ! arguments
@@ -70,6 +72,8 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   complex(8), allocatable :: q_nnLM_is(:,:,:,:) !! q_nn_LM_is(n,n',LM, ias) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
   real(8), allocatable :: jlgqsmallr(:, :, :, :), jlgrtmp(:), rfmt(:)
   complex(dp), allocatable :: qlmir(:,:)
+  complex(dp), allocatable :: B_ik(:,:,:,:)
+  complex(dp), allocatable :: B_jk(:,:,:,:)
 
   complex(8), Allocatable :: rpseudomat(:, :, :, :) ! (ifit,lm,igr,ias)
 
@@ -120,7 +124,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   call genWF(ik, wf1)
   call genWFinMT(wf1)
   call genWFonMesh(wf1)
-
+  call psi_sphr_SVDb(ik,wf1,B_ik)
   !call hello()
   !call testing(wf1)
 
@@ -277,7 +281,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     call genWFinMT(wf2)
     call genWFonMesh(wf2)
 
-
+    call psi_sphr_SVDb(jk,wf2,B_jk)
     !--------------------
     ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
     !call set_wf_planewaves(wf2)
@@ -346,6 +350,8 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     Allocate (potir0(ngrtot))
     Allocate (vxpsiirtmp(ngrtot))
     Allocate (vxpsigktmp(ngkmax))
+
+    call calc_multipoles(B_ik,B_jk, q_nnLM_is)
 
     Do ist2 = 1, nomax!1,1!!
 

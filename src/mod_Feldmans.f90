@@ -1,4 +1,6 @@
 module mod_Feldmans
+  ! TO DO:
+  ! *) Add generation of SVD basis per species to account for varying MT sizes.
   use modmain
   use precision, only: dp, i32
   use constants, only: pi
@@ -10,7 +12,8 @@ module mod_Feldmans
   use mod_lattice, only: omega
   implicit none
   private
-  public :: hello, testing, testing_calc, set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld
+  public :: calc_multipoles,hello, testing, testing_calc, &
+    set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld, psi_sphr_SVDb
 
   ! Ripped from Fortran stdlib
   real(dp), parameter :: tolerance = 4._dp*epsilon(1._dp)
@@ -239,6 +242,7 @@ contains
       lwork = -1
       call genSVDBasis(Nx,M_tmp,xweights,n,xgrid,work,lwork,gSVDb_vec(l))
     end do
+    write(*,*) "Allocated SVDbasis"
     deallocate(M_tmp)
     deallocate(jlxG)
     ! End Generating the SVD basis------------------------------
@@ -327,6 +331,56 @@ contains
     if (allocated(gsvdc)) deallocate(gsvdc)
   end subroutine finalise_mod_Feld
 
+  subroutine psi_sphr_SVDb(ik,wf,B)
+    !! Generates the B coefficients for a wavefunction for fixed k-vector.
+    integer, intent(in) :: ik !! non-reduced k-vector index of wf.
+    type(WFType), intent(in) :: wf !! WFType containing plane-wave expansions of psi.
+    complex(dp), intent(out), allocatable :: B(:,:,:,:) !! Expansions of radial functions of wf harmonic expansion into gSVD bases.
+    complex(dp), allocatable :: ylmgk(:) !! Spherical harmonic values for fixed G+k vec
+    real(dp), allocatable :: svdfac(:,:) !! Expansion coefficients of sBessel functions of fixed G+K into SVD basis
+    real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
+    real(dp), allocatable :: jx(:) !! single sBessel function
+    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n
+    lmax = size(gSVDb_vec)-1
+    n = gSVDb_vec(1)%n
+    allocate(B(gSVDb_vec(1)%n,lmmaxvr,nstfv,natmtot))
+    allocate(ylmgk(lmmaxvr))
+    allocate(svdfac(gSVDb_vec(1)%n,0:lmax))
+    allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
+    allocate(jx(gSVDb_vec(1)%Nx))
+    B = 0._dp
+    do igk = 1,Gkqset%ngk(1,ik)
+      ! Generate sBessel functions for fixed G+K
+      call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*maxval(rmt(1:nspecies)), jlx)
+
+      ! Express sBessel function into SVD basis
+      do l=0,lmax
+        jx = jlx(l,:)
+        svdfac(:,l) = sqrt(maxval(rmt)) * xToB(gSVDb_vec(l),jx(:))
+      end do
+
+      ! Calculate spherical harmonic values for G+k vec
+      call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+
+      ! Update the B coefficients for the G+k vec
+      do ias = 1, natmtot
+        do l=0,lmax
+          do m=-l,l
+            lm = idxlm(l,m)
+            do ibs = 1,n
+              do ist = 1,nstfv
+                B(ibs ,lm, ist, ias) = B(ibs ,lm, ist, ias) &
+                  + wf%gk(igk,ist) * fourpi * zil(l) &
+                  * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
+                  * svdfac(ibs,l)
+              end do
+            end do
+          end do
+        end do
+      end do
+
+    end do
+  end subroutine psi_sphr_SVDb
 
 
   subroutine testing_calc_2(ikp,wf1)
@@ -556,7 +610,49 @@ contains
   subroutine expressSBesselsInBases()
   end subroutine expressSBesselsInBases
 
+  subroutine calc_multipoles(B_ik,B_jk,q_nnLM_is)
+    !! Calculate multipoles given the B coefficient matrices
+    complex(dp), intent(in) :: B_ik(:,:,:,:)
+    complex(dp), intent(in) :: B_jk(:,:,:,:)
+    complex(dp), intent(out), allocatable :: q_nnLM_is(:,:,:,:)
 
+    integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max
+    lmax = size(gSVDb_vec)-1
+    L_max = lmax
+    !$OMP PARALLEL DO COLLAPSE(3) PRIVATE(ias, l, m, lm, l1, m1, lm1, l2, m2, lm2, ist1, ist2, ibs1, ibs2)
+    !ist,ibs,lm,ias
+    !ibs ,lm, ist, ias
+    do ias = 1, natmtot
+      do l = 0, L_max
+        do m = -l, l
+          lm = idxlm(l, m)
+          do l1 = 0, lmax
+            do l2 = abs(l-l1),min(lmax,l+l1), 2
+              do m1 = max(-l1,m-l2), min(l1,m+l2)
+                lm1 = idxlm(l1, m1)
+                lm2 = idxlm(l2, m1-m)
+                !if (abs(gntyyy(lm1, lm, lm2)) < 1e-14_dp) cycle  ! skip zeros
+                do ist1 = 1, nstfv
+                  do ist2 = 1, nstfv
+                    do ibs1 = 1, n
+                      do ibs2 = 1, n
+                        q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
+                          + cmplx(gntyyy(lm, lm2, lm1)) &
+                          * B_ik(ibs1, lm1, ist1, ias) &
+                          * conjg(B_jk(ibs2, lm2, ist2, ias)) &
+                          * cmplx(gI_Llsls(ibs1, ibs2, l1, l2, l))
+                      end do
+                    end do
+                  end do
+                end do
+              end do
+            end do
+          end do
+        end do
+      end do
+    end do
+!$OMP END PARALLEL DO
+  end subroutine calc_multipoles
 
 
   subroutine testing_calc(wf,q_nnLM_is)
@@ -1332,7 +1428,7 @@ contains
     !-----------------------------------------------------------------------
 
 
-    ! ! Paskatāmies, vai ir jau kaut kas sarē��ināts dotās viļņa f-as izvirzījumam.
+    ! ! Paskatāmies, vai ir jau kaut kas sarē��ināts dot��s viļņa f-as izvirzījumam.
     ! write(*,*) "Is allocated wf%mtrlm:", allocated(wf%mtrlm)
 
     ! ! sarēķinām to pašu vi����u funckijas izvirzījumu ar formulu:

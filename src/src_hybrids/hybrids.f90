@@ -121,7 +121,11 @@ Subroutine hybrids
   Allocate(rhomtref(lmmaxvr,nrmtmax,natmtot))
   If (allocated(rhoirref)) deallocate(rhoirref)
   Allocate (rhoirref(ngrtot))
+!!!MODIFICATIONS BY FELDMANS
 
+  call initialise_mod_Feld()
+
+  !!!END MODIFICATIONS BY FELDMANS
   !----------------------
   ! restart is requested
   !----------------------
@@ -247,11 +251,7 @@ Subroutine hybrids
     call MTNullify(mt_hscf)
 
 
-    !!!MODIFICATIONS BY FELDMANS
 
-    call initialise_mod_Feld()
-
-    !!!END MODIFICATIONS BY FELDMANS
 
 
     if (input%groundstate%do.eq."extraempty") then
