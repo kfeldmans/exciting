@@ -2,7 +2,7 @@ module mod_Basis1D
   use precision, only: dp, i32
   implicit none
   private
-  public :: Basis1D, xToB,BTox, genSVDBasis, SVDBasis
+  public :: Basis1D, xToB,BTox, genSVDBasis, SVDBasis, freeBasis1D
 
   type Basis1D
     !! Data type for storing vectors of a basis and integration weights for the space.
@@ -28,6 +28,13 @@ module mod_Basis1D
 
 contains
 
+  subroutine freeBasis1D(Basis)
+    type(Basis1D), intent(inout):: Basis
+
+    if (allocated(Basis%basis)) deallocate(Basis%basis)
+    if (allocated(Basis%xgrid)) deallocate(Basis%xgrid)
+    if (allocated(Basis%weights)) deallocate (Basis%weights)
+  end subroutine freeBasis1D
 
   function dxToB(Basis, f) result(koef)
     !! Get projection on to basis of f defined on xgrid

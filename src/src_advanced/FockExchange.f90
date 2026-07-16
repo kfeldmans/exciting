@@ -121,16 +121,16 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   call genWFinMT(wf1)
   call genWFonMesh(wf1)
 
-  call hello()
+  !call hello()
   !call testing(wf1)
 
   ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
   !call set_wf_planewaves(wf1)
   ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
-  call testing_calc_2(ikp,wf1)
+  !call testing_calc_2(ikp,wf1)
   write(*,*) "Have exited testing_calc_2"
   !stop
-  call testing_calc(wf1, q_nnLM_is)
+  !call testing_calc(wf1, q_nnLM_is)
 
   call WFInit(wf2)
 

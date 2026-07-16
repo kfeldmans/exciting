@@ -19,21 +19,11 @@ module mod_Feldmans
   ! Global values to be accessed for computations in mod_Feldmans
   Type(Basis1D), allocatable :: gSVDb_vec(:)
   real(dp), allocatable :: gI_Llsls(:,:,:,:,:)
-  complex(dp), allocatable :: gA(:,:,:)
+  real(dp), allocatable :: gb(:,:,:,:,:)
+  complex(dp), allocatable :: gsvdA(:,:,:) !! coefficients for expanding radial part of WF into SVD basis
+  real(dp), allocatable :: gsvdc(:,:,:,:) !! sBessel expansion coefficients in SVD basis
 
 contains
-
-  subroutine initialise_mod_Feld()
-    !! Precomputes SVD basis of sBessel functions,
-    !! integrals between basis functions, Gaunt coefficients,
-    !! computes expansions of used sBessel functions into the SVD basis,
-    !! precomputes coefficients for expansion of radial parts of WF harmonic expansions into SVD basis.
-  end subroutine initialise_mod_Feld
-
-
-  subroutine finalise_mod_Feld()
-    !! Deallocates memory allocated by initialise_mod_Feld.
-  end subroutine finalise_mod_Feld
 
   ! Ripped from fortran standard library
 
@@ -198,6 +188,146 @@ contains
     !wf%gk(1,1) = cmplx(1._dp, 1._dp)
     !wf%gk(3,1) = 3._dp
   end subroutine set_wf_planewaves
+
+  subroutine initialise_mod_Feld()
+    !! Precomputes SVD basis of sBessel functions,
+    !! integrals between basis functions, Gaunt coefficients.
+
+    ! Parameters for calculations
+    real(dp), parameter :: minx = 0._dp
+    real(dp), parameter :: maxx = 1._dp
+    real(dp), parameter :: minG = 0.00000001_dp
+    real(dp), parameter :: maxG = 10._dp
+    integer(i32), parameter :: Nx = 6000
+    integer(i32), parameter :: NG = 500
+    integer(i32), parameter :: n = 15 !! How many eigenvals & eigenfuncs to keep for representation
+    integer(i32), parameter :: lmax = 8 !! Maximum order for spherical Bessel functions
+    integer(i32), parameter :: L_max = 8 !! Maximum angular momentum to calculate integrals for
+
+    ! Grids for calculations with sBessel functions
+    real(dp) :: xgrid(Nx)
+    real(dp) :: xweights(Nx)
+    real(dp) :: Ggrid(NG)
+    real(dp) :: xpow(Nx)
+
+    ! Arrays for calculating intermediate results
+    real(dp), allocatable :: jlxg(:,:,:)
+    real(dp), allocatable :: work(:) ! Work array for blas/lapack
+    real(dp), allocatable :: M_tmp(:,:) ! Temporary matrix
+    real(dp), allocatable :: U_l(:,:,:)
+    real(dp), allocatable :: jlxg_rayl(:,:,:,:)
+
+    ! Loop variables, sizes
+    integer :: idxg, l, lwork, i,j,ll, l1,l2, ikp, ik, igk
+
+    ! Get radial grid to calculate sBessel functions on.
+    call gauss_legendre(xgrid,xweights, interval=[minx,maxx])
+    ! G-grid is just uniform.
+    Ggrid = linspace(minG,maxG,NG)
+
+    ! Generating the SVD basis-----------------------------------
+    ! Calculating sBessel functions of all orders on the grids.
+    allocate(jlxg(0:lmax,Nx,NG))
+    do idxg = 1,NG
+      call sbessel_vec(lmax,maxval(rmt(1:nspecies))*xgrid*Ggrid(idxg), jlxG(:,:,idxg))
+    end do
+    ! Calculate the SVD basis for each order of sBessel functions
+    allocate(gSVDb_vec(0:lmax))
+    allocate(M_tmp(Nx,NG))
+    do l=0,lmax
+      M_tmp = jlxG(l,:,:)
+      lwork = -1
+      call genSVDBasis(Nx,M_tmp,xweights,n,xgrid,work,lwork,gSVDb_vec(l))
+    end do
+    deallocate(M_tmp)
+    deallocate(jlxG)
+    ! End Generating the SVD basis------------------------------
+
+    ! Make sure Gaunt coefficients are computed-------------------
+    if (.not. allocated(gntyyy)) then
+      call gengntyyy
+    end if
+    ! End Make sure Gaunt coefficients are computed---------------
+
+    ! Calculate integrals between basis functions------------------
+    allocate(gI_Llsls(n,n,0:lmax,0:lmax,0:L_max))
+
+    allocate(U_l(Nx,n,0:lmax))
+    do ll=0, L_max
+
+      xpow = sqrt((gSVDb_vec(1)%xgrid*maxval(rmt(1:nspecies)))**(ll+2)*gSVDb_vec(1)%weights)
+      !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(i,j)
+      do j = 0, lmax
+        do i = 1, n
+          U_l(:, i, j) = gSVDb_vec(j)%basis(:,i)*xpow
+        end do
+      end do
+      !$OMP END PARALLEL DO
+      do l1 = 0, lmax
+        do l2=0,lmax
+          call dgemm('T', 'N', n, n, Nx, 1._dp, &
+            U_l(:, :, l1), Nx, &
+            U_l(:, :, l2), Nx, &
+            0._dp, gI_Llsls(:, :, l1, l2, ll), n)
+        end do
+      end do
+    end do
+    deallocate(U_l)
+    ! End calculate integrals between basis functions--------------
+
+#define testing_8524324716129841
+#ifdef testing_8524324716129841
+    ! Express sBessels in SVD basis--------------------------------
+    ! Calculate the sBessels
+    allocate(jlxg_rayl(0:lmax,Nx,maxval(Gkqset%ngk), nkpt))
+    do ikp = 1, nkpt ! loop over reduced index
+      ik = kset%ikp2ik(ikp) ! recover non-reduced index
+      do igk=1,Gkqset%ngk(1,ik)
+        call sbessel_vec(lmax,xgrid*Gkqset%gkc(igk,1,ik)*maxval(rmt(1:nspecies)),jlxg_rayl(:,:,igk,ikp))
+      end do
+    end do
+
+    ! Express the sBessels
+    allocate(gsvdc(n,maxval(Gkqset%ngk),0:lmax,nkpt))
+    allocate(M_tmp(Nx,NG))
+    do ikp = 1, nkpt
+      ik = kset%ikp2ik(ikp)
+      do l=0,lmax
+        M_tmp = jlxg_rayl(l,:,:,ikp)
+        do igk= 1,Gkqset%ngk(1,ik)
+          gsvdc(:,igk,l,ikp) = sqrt(maxval(rmt)) * xToB(gSVDb_vec(l),M_tmp(:,igk))
+        end do
+      end do
+    end do
+    deallocate(M_tmp)
+    deallocate(jlxg_rayl)
+    ! End Express sBessels in SVD basis----------------------------
+
+    ! Precompute coefficients for harmonic WF radial part expansion into SVD basis----------------
+
+
+    ! End Precompute coefficients for harmonic WF radial part expansion into SVD basis------------
+#endif testing_8524324716129841
+  end subroutine initialise_mod_Feld
+
+
+  subroutine finalise_mod_Feld()
+    !! Deallocates memory allocated by initialise_mod_Feld, except Gaunt coefficients.
+    integer :: i
+
+    if (allocated(gI_Llsls)) deallocate(gI_Llsls)
+
+    if (allocated(gSVDb_vec)) then
+      do i = 0, size(gSVDb_vec)
+        call freeBasis1D(gSVDb_vec(i))
+      end do
+      deallocate(gSVDb_vec)
+    end if
+
+    if (allocated(gsvdc)) deallocate(gsvdc)
+  end subroutine finalise_mod_Feld
+
+
 
   subroutine testing_calc_2(ikp,wf1)
     !! Calculate multipoles as in testing_calc, but works for multiple k-points.
@@ -1118,7 +1248,7 @@ contains
 
 !#define modFeld1
 #ifdef modFeld1
-! Atrodam, kurām sbese��a funkcijam ir lielie koeficienti.
+! Atrodam, kurām sbese����a funkcijam ir lielie koeficienti.
     do l=0,lmax
       do igk = 1, Gkqset%ngk(1,1)
         if (maxval(abs(svdfac(:,igk,l)))>1._dp) then
@@ -1163,7 +1293,7 @@ contains
 
 
 
-    ! Psi sfērisko harmoniku koeficienti ir izvirzīti SVD bāzē, kur izvirzījuma koef ir B.
+    ! Psi sfērisko harmoniku koeficienti ir izvirzīti SVD bāz��, kur izvirzījuma koef ir B.
     ! Psi_nlm(r) = Chi_mat * B_vec
 
 
