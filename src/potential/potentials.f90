@@ -344,7 +344,7 @@ contains
 
 
 
-  subroutine coulomb_potential2vFeld(qlmir_in,qlmir_out, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zn, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, cutoff,&
+  subroutine coulomb_potential2vFeld(qlmir_out, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zn, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, cutoff,&
     & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat)
     use modsurf, only: surf_pot
     use constants, only: y00,zzero
@@ -385,7 +385,7 @@ contains
     complex(dp), intent(out) :: zrho0
     real(8), intent(in) :: qvec(3)
 
-    complex(dp), allocatable, intent(in) :: qlmir_in(:,:)
+    !complex(dp), allocatable, intent(in) :: qlmir_in(:,:)
     complex(dp), allocatable, intent(out) :: qlmir_out(:,:)
 !> option for using coulomb cutoff for solving Poisson's equation
     logical, optional, intent(in) :: cutoff

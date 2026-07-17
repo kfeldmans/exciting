@@ -7,9 +7,10 @@ module mod_Feldmans
   use mod_sbessel, only: sbessel, sbessel_vec
   use mod_eigensystem, only: WFType
   use mod_kpointset, only: Gk_set
-  use modgw, only: Gkqset, Gkset, kqset, kset
+  use modgw, only: Gkqset, Gkset, kqset, kset,nomax
   use mod_Basis1D
   use mod_lattice, only: omega
+  use mod_eigenvalue_occupancy
   implicit none
   private
   public :: calc_multipoles,hello, testing, testing_calc, &
@@ -259,14 +260,15 @@ contains
     allocate(U_l(Nx,n,0:lmax))
     do ll=0, L_max
 
-      xpow = sqrt((gSVDb_vec(1)%xgrid*maxval(rmt(1:nspecies)))**(ll+2)*gSVDb_vec(1)%weights)
+      xpow = sqrt(((gSVDb_vec(1)%xgrid*maxval(rmt(1:nspecies)))**(ll+2))*gSVDb_vec(1)%weights)
       !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(i,j)
-      do j = 0, lmax
+      do l = 0, lmax
         do i = 1, n
-          U_l(:, i, j) = gSVDb_vec(j)%basis(:,i)*xpow
+          U_l(:, i, l) = gSVDb_vec(l)%basis(:,i)*xpow
         end do
       end do
       !$OMP END PARALLEL DO
+
       do l1 = 0, lmax
         do l2=0,lmax
           call dgemm('T', 'N', n, n, Nx, 1._dp, &
@@ -279,7 +281,7 @@ contains
     deallocate(U_l)
     ! End calculate integrals between basis functions--------------
 
-#define testing_8524324716129841
+!#define testing_8524324716129841
 #ifdef testing_8524324716129841
     ! Express sBessels in SVD basis--------------------------------
     ! Calculate the sBessels
@@ -312,6 +314,8 @@ contains
 
     ! End Precompute coefficients for harmonic WF radial part expansion into SVD basis------------
 #endif testing_8524324716129841
+
+    write(*,*) "Initialisation for mod_Feld complete"
   end subroutine initialise_mod_Feld
 
 
@@ -322,13 +326,15 @@ contains
     if (allocated(gI_Llsls)) deallocate(gI_Llsls)
 
     if (allocated(gSVDb_vec)) then
-      do i = 0, size(gSVDb_vec)
+      do i = 0, size(gSVDb_vec)-1
         call freeBasis1D(gSVDb_vec(i))
       end do
       deallocate(gSVDb_vec)
     end if
 
     if (allocated(gsvdc)) deallocate(gsvdc)
+
+    write(*,*) "Finalisation for mod_Feld complete"
   end subroutine finalise_mod_Feld
 
   subroutine psi_sphr_SVDb(ik,wf,B)
@@ -614,12 +620,13 @@ contains
     !! Calculate multipoles given the B coefficient matrices
     complex(dp), intent(in) :: B_ik(:,:,:,:)
     complex(dp), intent(in) :: B_jk(:,:,:,:)
-    complex(dp), intent(out), allocatable :: q_nnLM_is(:,:,:,:)
+    complex(dp), intent(out) :: q_nnLM_is(:,:,:,:)
 
     integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max
     lmax = size(gSVDb_vec)-1
     L_max = lmax
-    !$OMP PARALLEL DO COLLAPSE(3) PRIVATE(ias, l, m, lm, l1, m1, lm1, l2, m2, lm2, ist1, ist2, ibs1, ibs2)
+    n = gSVDb_vec(1)%n
+    !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ias, l, m, lm, l1, m1, lm1, l2, m2, lm2, ist1, ist2, ibs1, ibs2)
     !ist,ibs,lm,ias
     !ibs ,lm, ist, ias
     do ias = 1, natmtot
@@ -637,10 +644,10 @@ contains
                     do ibs1 = 1, n
                       do ibs2 = 1, n
                         q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
-                          + cmplx(gntyyy(lm, lm2, lm1)) &
+                          + (cmplx(gntyyy(lm, lm2, lm1)) &
                           * B_ik(ibs1, lm1, ist1, ias) &
                           * conjg(B_jk(ibs2, lm2, ist2, ias)) &
-                          * cmplx(gI_Llsls(ibs1, ibs2, l1, l2, l))
+                          * cmplx(gI_Llsls(ibs1, ibs2, l1, l2, l)))
                       end do
                     end do
                   end do
@@ -652,12 +659,15 @@ contains
       end do
     end do
 !$OMP END PARALLEL DO
+    q_nnLM_is = q_nnLM_is / omega
   end subroutine calc_multipoles
 
 
-  subroutine testing_calc(wf,q_nnLM_is)
+  subroutine testing_calc(idxk,wf,q_nnLM_is, B_ik)
+    integer, intent(in) :: idxk !! The index of non-reduced k-vector.
     Type(WFType), intent(in) :: wf
-    complex(dp), allocatable, intent(out) :: q_nnLM_is(:,:,:, :) ! q_nn_LM_is(n,n',LM, is) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
+    complex(dp), allocatable, intent(out) :: q_nnLM_is(:,:,:, :) !! q_nn_LM_is(n,n',LM, is) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
+    complex(dp), allocatable, intent(in) :: B_ik(:,:,:,:) !! B_ik(gSVDb_vec(1)%n,lmmaxvr,nstfv,natmtot)
     real(dp), parameter :: minx = 0._dp
     real(dp) :: maxx = 1._dp
     real(dp), parameter :: minG = 0.00000001_dp
@@ -728,6 +738,7 @@ contains
       lwork = -1
       call genSVDBasis(Nx,A,weightsx,n,xgrid,work,lwork,SVDb_vec(l))
     end do
+    SVDb_vec = gSVDb_vec
 
     !call testing_non_zero_gaunt_count
     if (.not. allocated(gntyyy)) then
@@ -774,27 +785,27 @@ contains
 #endif SVDProjCheck
 
     ! Calculating the spherical harmonics at G_ang angles, stored in ylmgk.
-    allocate(ylmgk(lmmaxvr,Gkqset%ngk(1,1)))
-    Do igk = 1, Gkqset%ngk(1,1)
-      Call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:, igk,1,1), ylmgk(:, igk))
+    allocate(ylmgk(lmmaxvr,Gkqset%ngk(1,idxk)))
+    Do igk = 1, Gkqset%ngk(1,idxk)
+      Call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:, igk,1,idxk), ylmgk(:, igk))
     End Do
 
     write(*,*) "lmmaxvr: ", lmmaxvr
     write(*,*) "input%groundstate%lmaxvr: ", input%groundstate%lmaxvr
 
     ! Calculate the sBessel functions used in the Rayleigh expansion
-    allocate(jlxg_rayl(0:lmax,Nx,Gkqset%ngk(1,1)))
+    allocate(jlxg_rayl(0:lmax,Nx,Gkqset%ngk(1,idxk)))
     do igk=1,Gkqset%ngk(1,1)
-      call sbessel_vec(lmax,xgrid * Gkqset%gkc(igk,1,1)*maxval(rmt(1:nspecies)),jlxg_rayl(:,:,igk))
+      call sbessel_vec(lmax,xgrid * Gkqset%gkc(igk,1,idxk)*maxval(rmt(1:nspecies)),jlxg_rayl(:,:,igk))
     end do
 
     ! Calculate SVDb coefficients for each sBessel function used in Rayleigh expansion
     write(*,*) "Started finding psi_nlm through B coefficients"
-    allocate(svdfac(n,Gkqset%ngk(1,1),0:lmax))
-    allocate(jxg(Nx,Gkqset%ngk(1,1)))
+    allocate(svdfac(n,Gkqset%ngk(1,idxk),0:lmax))
+    allocate(jxg(Nx,Gkqset%ngk(1,idxk)))
     do l=0,lmax
       jxg = jlxg_rayl(l,:,:)
-      do igk=1,Gkqset%ngk(1,1)
+      do igk=1,Gkqset%ngk(1,idxk)
         svdfac(:,igk,l) = sqrt(maxval(rmt))*xToB(SVDb_vec(l), jxg(:,igk))
       end do
     end do
@@ -805,13 +816,13 @@ contains
     allocate(B(n,lmmaxvr,nstfv))
     B = 0._dp
     ! Gkqset%sfacgk(ngk(:,:),natmmax,1,ik): ispn == 1 - index spinor,
-    do igk = 1, ngk(1,1)
+    do igk = 1, ngk(1,idxk)
       do ist = 1, nstfv ! index state
         do l = 0, input%groundstate%lmaxvr
           do m= -l,l
             lm = idxlm(l,m)
             do ibs=1,n
-              B(ibs,lm,ist)= B(ibs,lm,ist) + omega_inv*wf%gk(igk,ist)*fourpi* cmplx(0,1, kind=dp) ** l * (Gkqset%sfacgk(igk,1,1,1)) * (ylmgk(lm,igk))*svdfac(ibs,igk,l)
+              B(ibs,lm,ist)= B(ibs,lm,ist) + omega_inv*wf%gk(igk,ist)*fourpi* cmplx(0,1, kind=dp) ** l * (Gkqset%sfacgk(igk,1,1,idxk)) * (ylmgk(lm,igk))*svdfac(ibs,igk,l)
             end do !s
           end do ! m
         end do ! l
@@ -833,8 +844,8 @@ contains
             do m=-l,l
               lm=idxlm(l,m)
               do ibs=1,n
-                do igk = 1, ngk(1,1)
-                  B_is(ibs,lm,ist,ias) = B_is(ibs,lm,ist, ias) + omega_inv*wf%gk(igk,ist)*fourpi*Gkqset%sfacgk(igk,ias,1,1)* (cmplx(0,1, kind=dp) ** l)  * conjg(ylmgk(lm,igk))*svdfac(ibs,igk,l)
+                do igk = 1, ngk(1,idxk)
+                  B_is(ibs,lm,ist,ias) = B_is(ibs,lm,ist, ias) + omega_inv*wf%gk(igk,ist)*fourpi*Gkqset%sfacgk(igk,ias,1,idxk)* (cmplx(0,1, kind=dp) ** l)  * conjg(ylmgk(lm,igk))*svdfac(ibs,igk,l)
                 end do ! igk
               end do ! ibs
             end do ! m
@@ -1059,6 +1070,10 @@ contains
       end do
     end do
 !$OMP END PARALLEL DO
+
+    write(*,*) "Checking B coefficient agreement: ", maxval(abs(B_is-((omega_inv) *B_ik)))
+    write(*,*) "Checking tabulated integral agreement: ", maxval(abs(I_Llsls-gI_Llsls))
+
 #endif new_loop_1312312
 
 !#define loop_optimization_1_43141983471283
@@ -1079,14 +1094,14 @@ contains
     end do !is
 #endif loop_optimization_1_43141983471283
 
-!#define print_multipole_results_12313213132423151
+#define print_multipole_results_12313213132423151
 #ifdef print_multipole_results_12313213132423151
     write(*,*) "Maximum abs of multipoles: ", maxval(abs(q_nnLM_is))
 
     do ist1 = 1,nstfv
       do ist2=1,nstfv
         !print '("NEW: For pair ", I0, ", ", I0, " obtained value ", F0.3)', ist1, ist2, maxval(abs(q_nnLM_is(ist1,ist2,:,:)))
-        if (ist1 == 1 .and. ist2 == 1) then
+        if (ist1 == 1 .and. ist2 == 5) then
           do is = 1, nspecies
             do ia = 1, natoms(is)
 
@@ -1096,7 +1111,7 @@ contains
                   ias = idxas(ia, is)
                   lm = idxlm(l,m)
                   !For l ", I0, ", and m ", I0, " on atom ", I0 ," obtained values ", F0.10,F0.10)', l, m,ias, qlmir(lm,ias)%re,(qlmir(lm,ias)%Im)
-                  print '("NEW: For l ", I0, ", and m ", I0, " on atom ", I0 ," obtained value ", F0.10, F0.10)', l, m,ias, (q_nnLM_is(ist1,ist2,lm,ias)%re), (q_nnLM_is(ist1,ist2,lm,ias)%im)
+                  print '("NEW: For lm ", I0, " on atom ", I0 ," obtained value ", F0.10)', lm ,ias, (abs(q_nnLM_is(ist1,ist2,lm,ias)))
                   !print '(F0.10, " ", F0.10)',dble(q_nnLM_is(ist1,ist2,lm,ias)), dimag(q_nnLM_is(ist1,ist2,lm,ias))
                 end do
               end do

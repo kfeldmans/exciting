@@ -72,17 +72,25 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   complex(8), allocatable :: q_nnLM_is(:,:,:,:) !! q_nn_LM_is(n,n',LM, ias) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
   real(8), allocatable :: jlgqsmallr(:, :, :, :), jlgrtmp(:), rfmt(:)
   complex(dp), allocatable :: qlmir(:,:)
+  complex(dp), allocatable :: qlmir_new(:,:)
   complex(dp), allocatable :: B_ik(:,:,:,:)
   complex(dp), allocatable :: B_jk(:,:,:,:)
+  complex(dp), allocatable :: q_nnLM_is_oldnew(:,:,:,:)
 
   complex(8), Allocatable :: rpseudomat(:, :, :, :) ! (ifit,lm,igr,ias)
 
   type(WFType) :: wf1, wf2, prod, pot
+  integer :: ik_test,ist3_test,jk_test,ist2_test
 ! external functions
   Complex(8) zfinp, zfmtinp, zfinpir, zfinpmt
   External zfinp, zfmtinp, zfinpir, zfinpmt
   logical :: print_times
   print_times = .true.
+
+  ik_test = 2
+  ist3_test = 4
+  jk_test = 6
+  ist2_test = 1
 
 ! allocate local arrays
   Allocate (vgqc(3, ngvec))
@@ -124,17 +132,19 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   call genWF(ik, wf1)
   call genWFinMT(wf1)
   call genWFonMesh(wf1)
+  write(*,*) "start Calculation SVD for wf1"
   call psi_sphr_SVDb(ik,wf1,B_ik)
+  write(*,*) "end calculation SVD for wf1!"
   !call hello()
   !call testing(wf1)
 
   ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
   !call set_wf_planewaves(wf1)
   ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
-  !call testing_calc_2(ikp,wf1)
-  write(*,*) "Have exited testing_calc_2"
+  !call testing_calc(ikp,wf1)
+  !write(*,*) "Have exited testing_calc_2"
   !stop
-  !call testing_calc(wf1, q_nnLM_is)
+  !call testing_calc(ik ,wf1, q_nnLM_is_oldnew,B_ik)
 
   call WFInit(wf2)
 
@@ -282,6 +292,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     call genWFonMesh(wf2)
 
     call psi_sphr_SVDb(jk,wf2,B_jk)
+    write(*,*) "284 in FE"
     !--------------------
     ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
     !call set_wf_planewaves(wf2)
@@ -322,10 +333,15 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     time_misc = 0d0
     time_critical = 0d0
     time_pw = 0d0
-
+    write(*,*)"B_ik is allocated:", allocated(B_ik)
+    write(*,*)"B_jk is allocated:", allocated(B_jk)
+    Allocate (q_nnLM_is(nstfv,nstfv,lmmaxvr,natmtot))
+    q_nnLM_is = 0._dp
+    write(*,*)"q_nnLM_is is allocated:", allocated(q_nnLM_is)
+    call calc_multipoles(B_ik,B_jk, q_nnLM_is)
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
     !ist2
 
     !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -350,9 +366,8 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     Allocate (potir0(ngrtot))
     Allocate (vxpsiirtmp(ngrtot))
     Allocate (vxpsigktmp(ngkmax))
-
-    call calc_multipoles(B_ik,B_jk, q_nnLM_is)
-
+    Allocate(qlmir_new(lmmaxvr, natmtot))
+    allocate(qlmir(lmmaxvr,natmtot))
     Do ist2 = 1, nomax!1,1!!
 
       call timesec(tc)
@@ -367,6 +382,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       time_fft = time_fft + td - tc
 !$OMP DO SCHEDULE(DYNAMIC)
       Do ist3 = 1, nstfv!1,1!!
+        qlmir_new(:,:) = q_nnLM_is(ist3,ist2,:,:)
         vxpsiirtmp(:) = 0.d0
         call timesec(tc)
         wf1ir(:) = 0.d0
@@ -454,14 +470,43 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
                   lm = idxlm(l,m)
 
                   !write(*,*) "Multipole moements for 5,5: ", qlmir
-                  print '("OLD: For l ", I0, ", and m ", I0, " on atom ", I0 ," obtained values ", F0.10,F0.10)', l, m,ias, qlmir(lm,ias)%re,(qlmir(lm,ias)%Im)
+                  !print '("OLD: For l ", I0, ", and m ", I0, " on atom ", I0 ," obtained values ", F0.10,F0.10)', l, m,ias, qlmir(lm,ias)%re,(qlmir(lm,ias)%Im)
+                  print '("OLD: For (ik, n) (", I0, ",", I0, ") (jk,m) (", I0,",",I0, ") a ", I0 ," lm ", I0, " obtained values ", F0.10,F0.10)',&
+                    ik,ist3,jk, ist2,ias,lm, qlmir(lm,ias)%re,(qlmir(lm,ias)%Im)
+                  print '("NEW: For (ik, n) (", I0, ",", I0, ") (jk,m) (", I0,",",I0, ") a ", I0 ," lm ", I0, " obtained values ", F0.10,F0.10)',&
+                    ik,ist3,jk, ist2,ias,lm, qlmir_new(lm,ias)%re,(qlmir_new(lm,ias)%Im)
                   !print '(F0.10, " ", F0.10)',dble(qlmir(lm,ias)), dimag(qlmir(lm,ias))
                 end do
               end do
             end do
           end do
-          write(*,*) "FockExchange: species radii: ", rmt
+          !write(*,*) "FockExchange: species radii: ", rmt
 #endif TESTING_PRINTMULTIPOLECOMAPRISON_312312
+
+!#define TESTING_7575808138123814824
+#ifdef TESTING_7575808138123814824
+          do ias = 1, natmtot
+            do lm = 1, lmmaxvr
+              print '("DIFF: For (ik, n) (", I0, ",", I0, ") (jk,m) (", I0,",",I0, ") a ", I0 ," lm ", I0, " the diff is ", F0.10,F0.10)',&
+                ik,ist3,jk, ist2,ias,lm, abs(qlmir_new(lm,ias)-qlmir(lm,ias))
+            end do
+          end do
+#endif TESTING_7575808138123814824
+
+#define TESTING_41731874817412
+#ifdef TESTING_41731874817412
+
+          if (ik==ik_test .and. ist3 == ist3_test .and. jk == jk_test .and. ist2==ist2_test) then
+            do ias = 1,natmtot
+              do lm = 1,lmmaxvr
+                print '("For (ik, n) (", I0, ",", I0, ") (jk,m) (", I0,",",I0, ") a ", I0 ," lm ", I0, " OLD:", F0.10, " NEW:",F0.10)',&
+                  ik,ist3,jk, ist2,ias,lm, abs(qlmir(lm,ias)),abs(qlmir_new(lm,ias))
+                !print '("OLD: For (ik, n) (", I0, ",", I0, ") (jk,m) (", I0,",",I0, ") a ", I0 ," lm ", I0, " the diff is ", F0.10,F0.10)',&
+                !ik,ist3,jk, ist2,ias,lm
+              end do
+            end do
+          end if
+#endif TESTING_41731874817412
 
 !#define TESTING_MULTIPOLE_CALCULATION_8113211203141
 #ifdef TESTING_MULTIPOLE_CALCULATION_8113211203141
@@ -564,7 +609,10 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     Deallocate (potmt0)
     Deallocate (vxpsiirtmp)
     Deallocate (vxpsigktmp)
+    deallocate(qlmir)
+    deallocate(qlmir_new)
 !$OMP END PARALLEL
+    deallocate (q_nnLM_is)
 
     call timesec(ta)
     if (print_times) then
