@@ -508,8 +508,9 @@ contains
         & jlgpr, ylmgp, sfacgp, igfft, &
         zrhoig_sort, qlmir)
     endif
-    call timesec(tb)
+
 #endif temp_removal_1237123812038120
+    call timesec(tb)
 !write(*,*)"multipoles:",tb-ta
 
 ! take difference of muffin-tin and interstitial multipole moments

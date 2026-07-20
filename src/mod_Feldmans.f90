@@ -259,7 +259,7 @@ contains
 
     allocate(U_l(Nx,n,0:lmax))
     do is = 1,nspecies
-      do ll=0, L_max
+      do ll= 0, L_max
 
         xpow = sqrt(((gSVDb_vec(1)%xgrid*rmt(is))**(ll+2))*gSVDb_vec(1)%weights)
         !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(i,j)
@@ -358,11 +358,11 @@ contains
     allocate(jx(gSVDb_vec(1)%Nx))
 
     B = 0._dp
+    write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
     do igk = 1,Gkqset%ngk(1,ik)
       do is = 1,nspecies
         ! Generate sBessel functions for fixed G+K
         call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*rmt(is), jlx)
-
         ! Express sBessel function into SVD basis
 
         do l=0,lmax
@@ -374,13 +374,14 @@ contains
         call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
 
         ! Update the B coefficients for the G+k vec
+!$OMP PARALLEL DO COLLAPSE(3) PRIVATE(ia,ias,ist,l,m,lm,ibs)
         do ia = 1, natoms(is)
-          ias = idxas(ia,is)
-          do l=0,lmax
-            do m=-l,l
-              lm = idxlm(l,m)
-              do ibs = 1,n
-                do ist = 1,nstfv
+          do ist = 1,nstfv
+            do l=0,lmax
+              ias = idxas(ia,is)
+              do m=-l,l
+                lm = idxlm(l,m)
+                do ibs = 1,n
                   B(ibs ,lm, ist, ias) = B(ibs ,lm, ist, ias) &
                     + wf%gk(igk,ist) * fourpi * zil(l) &
                     * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
@@ -390,8 +391,8 @@ contains
             end do
           end do
         end do
+!$OMP END PARALLEL DO
       end do
-
     end do
   end subroutine psi_sphr_SVDb
 
@@ -628,47 +629,55 @@ contains
     complex(dp), intent(in) :: B_ik(:,:,:,:)
     complex(dp), intent(in) :: B_jk(:,:,:,:)
     complex(dp), intent(out) :: q_nnLM_is(:,:,:,:)
+    complex(dp) :: acc,bj
+    real(dp) :: g, w, gaunt
+
 
     integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max,ia,is
     lmax = size(gSVDb_vec)-1
     L_max = lmax
     n = gSVDb_vec(1)%n
-    !!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(is,ia,ias, l, m, lm, l1, m1, lm1, l2, m2, lm2, ist1, ist2, ibs1, ibs2)
+    q_nnLM_is = (0.0_dp, 0.0_dp)
     !ist,ibs,lm,ias
     !ibs ,lm, ist, ias
     do is = 1,nspecies
+      !$OMP PARALLEL DO COLLAPSE(2) SCHEDULE(static) DEFAULT(shared) PRIVATE(ia,ias, l, m, lm, l1, m1, lm1, l2, lm2, ist1, ist2, ibs1, ibs2,acc,g,w,bj)
       do ia = 1,natoms(is)
-        ias = idxas(ia,is)
         do l = 0, L_max
+          ias = idxas(ia,is)
           do m = -l, l
             lm = idxlm(l, m)
-            do l1 = 0, lmax
-              do l2 = abs(l-l1),min(lmax,l+l1), 2
-                do m1 = max(-l1,m-l2), min(l1,m+l2)
-                  lm1 = idxlm(l1, m1)
-                  lm2 = idxlm(l2, m1-m)
-                  !if (abs(gntyyy(lm1, lm, lm2)) < 1e-14_dp) cycle  ! skip zeros
-                  do ist1 = 1, nstfv
-                    do ist2 = 1, nstfv
-                      do ibs1 = 1, n
-                        do ibs2 = 1, n
-                          q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
-                            + (cmplx(gntyyy(lm, lm2, lm1)) &
-                            * B_ik(ibs1, lm1, ist1, ias) &
-                            * conjg(B_jk(ibs2, lm2, ist2, ias)) &
-                            * cmplx(gI_Llsls(ibs1, ibs2, l1, l2, l,is)))
-                        end do
-                      end do
-                    end do
-                  end do
-                end do
+            do ist2 = 1, nstfv
+              do ist1 = 1, nstfv
+                acc = (0.0_dp,0.0_dp)
+
+                do l1 = 0, lmax
+                  do l2 = abs(l-l1),min(lmax,l+l1), 2
+                    do m1 = max(-l1,m-l2), min(l1,m+l2)
+                      lm1 = idxlm(l1, m1)
+                      lm2 = idxlm(l2, m1-m)
+                      g = gntyyy(lm,lm2,lm1)
+
+                      do ibs2 = 1, n
+                        bj = conjg(B_jk(ibs2, lm2, ist2, ias))
+                        do ibs1 = 1, n
+                          w = g * gI_Llsls(ibs1, ibs2, l1, l2, l,is)
+                          acc = acc + w * B_ik(ibs1, lm1, ist1, ias) * bj
+                        end do !ibs1
+                      end do !ibs2
+
+                    end do  !m1
+                  end do !l2
+                end do !l1
+                q_nnLM_is(ist1,ist2,lm,ias) = acc / omega
               end do
             end do
           end do
         end do
       end do
+      !$OMP END PARALLEL DO
     end do
-!!$OMP END PARALLEL DO
+
     q_nnLM_is = q_nnLM_is / omega
   end subroutine calc_multipoles
 

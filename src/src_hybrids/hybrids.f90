@@ -125,7 +125,7 @@ Subroutine hybrids
 
   call initialise_mod_Feld()
 
-  !!!END MODIFICATIONS BY FELDMANS
+!!!END MODIFICATIONS BY FELDMANS
   !----------------------
   ! restart is requested
   !----------------------
@@ -288,9 +288,9 @@ Subroutine hybrids
           conv_emp = conv_emp+ dble(vxnl(ik,ik, 1))**2
         end do
         write(*,*)conv_emp-conv_old, "convergence criteria--------------"
-        if ((conv_emp-conv_old).lt.1e-5) then
-          exit
-        end if
+        !if ((conv_emp-conv_old).lt.1e-5) then
+        exit
+        !end if
         call flushifc(60)
         conv_old = conv_emp
         conv_emp = 0.d0
