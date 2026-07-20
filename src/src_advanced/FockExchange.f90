@@ -72,6 +72,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   complex(8), allocatable :: q_nnLM_is(:,:,:,:) !! q_nn_LM_is(n,n',LM, ias) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
   real(8), allocatable :: jlgqsmallr(:, :, :, :), jlgrtmp(:), rfmt(:)
   complex(dp), allocatable :: qlmir(:,:)
+  complex(dp), allocatable :: qlmir_in(:,:)
   complex(dp), allocatable :: qlmir_new(:,:)
   complex(dp), allocatable :: B_ik(:,:,:,:)
   complex(dp), allocatable :: B_jk(:,:,:,:)
@@ -87,10 +88,10 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   logical :: print_times
   print_times = .true.
 
-  ik_test = 2
-  ist3_test = 4
-  jk_test = 6
-  ist2_test = 1
+  ik_test = 4
+  ist3_test = 2
+  jk_test = 4
+  ist2_test = 2
 
 ! allocate local arrays
   Allocate (vgqc(3, ngvec))
@@ -108,6 +109,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   Allocate (zfmt(lmmaxvr, nrcmtmax), zfmt0(lmmaxvr, nrcmtmax))
   Allocate (zvclmt(lmmaxvr, nrcmtmax, natmtot, nstsv)) !dealoc
   !Allocate (zwfir(ngkmax))
+
 
   !!write(*,*) "erfcapprox=",input%groundstate%hybrid%erfcapprox
   !write(*,*) "rpseudo=",input%groundstate%hybrid%rpseudo
@@ -449,7 +451,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
           potmt0 = zzero
           potir0 = zzero
 
-          Call coulomb_potential2vFeld(qlmir, nrcmt, rcmt, ngvec, gqc, igq0, &
+          Call coulomb_potential2vFeld(qlmir_new, qlmir, nrcmt, rcmt, ngvec, gqc, igq0, &
             & jlgqr, ylmgq, sfacgq, zn, prod%mtrlm(:, :, :, 1), &
             & prodir(:), pot%mtrlm(:, :, :, 1), potir, zrho02, v, &
             & cutoff=cutoff, hybrid_in=.true.,&
@@ -493,9 +495,9 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
           end do
 #endif TESTING_7575808138123814824
 
-#define TESTING_41731874817412
+!#define TESTING_41731874817412
 #ifdef TESTING_41731874817412
-
+          !print '("Iteration: ", I0," ", I0, " ", I0," ", I0)', ik, ist3, jk, ist2
           if (ik==ik_test .and. ist3 == ist3_test .and. jk == jk_test .and. ist2==ist2_test) then
             do ias = 1,natmtot
               do lm = 1,lmmaxvr

@@ -344,7 +344,7 @@ contains
 
 
 
-  subroutine coulomb_potential2vFeld(qlmir_out, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zn, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, cutoff,&
+  subroutine coulomb_potential2vFeld(qlmir_in,qlmir_out, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zn, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, cutoff,&
     & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat)
     use modsurf, only: surf_pot
     use constants, only: y00,zzero
@@ -386,6 +386,7 @@ contains
     real(8), intent(in) :: qvec(3)
 
     !complex(dp), allocatable, intent(in) :: qlmir_in(:,:)
+    complex(dp), allocatable, intent(in) :: qlmir_in(:,:)
     complex(dp), allocatable, intent(out) :: qlmir_out(:,:)
 !> option for using coulomb cutoff for solving Poisson's equation
     logical, optional, intent(in) :: cutoff
@@ -495,6 +496,8 @@ contains
       ngp2=ig + 1
     endif
     call timesec(ta)
+!#define temp_removal_1237123812038120
+#ifdef temp_removal_1237123812038120
     if (yukawa) then
       call multipoles_ir3( input%groundstate%lmaxvr, ngp2, gpc, &
         & jlgpr, ylmgp, sfacgp, igfft, &
@@ -506,10 +509,12 @@ contains
         zrhoig_sort, qlmir)
     endif
     call timesec(tb)
+#endif temp_removal_1237123812038120
 !write(*,*)"multipoles:",tb-ta
 
 ! take difference of muffin-tin and interstitial multipole moments
     qlmir_out = qlmir
+    qlmir = qlmir_in
     qlm = qlm - qlmir
 
 

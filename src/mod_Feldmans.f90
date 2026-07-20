@@ -22,7 +22,7 @@ module mod_Feldmans
 
   ! Global values to be accessed for computations in mod_Feldmans
   Type(Basis1D), allocatable :: gSVDb_vec(:)
-  real(dp), allocatable :: gI_Llsls(:,:,:,:,:)
+  real(dp), allocatable :: gI_Llsls(:,:,:,:,:,:)
   real(dp), allocatable :: gb(:,:,:,:,:)
   complex(dp), allocatable :: gsvdA(:,:,:) !! coefficients for expanding radial part of WF into SVD basis
   real(dp), allocatable :: gsvdc(:,:,:,:) !! sBessel expansion coefficients in SVD basis
@@ -222,7 +222,7 @@ contains
     real(dp), allocatable :: jlxg_rayl(:,:,:,:)
 
     ! Loop variables, sizes
-    integer :: idxg, l, lwork, i,j,ll, l1,l2, ikp, ik, igk
+    integer :: idxg, l, lwork, i,j,ll, l1,l2, ikp, ik, igk,is
 
     ! Get radial grid to calculate sBessel functions on.
     call gauss_legendre(xgrid,xweights, interval=[minx,maxx])
@@ -255,26 +255,28 @@ contains
     ! End Make sure Gaunt coefficients are computed---------------
 
     ! Calculate integrals between basis functions------------------
-    allocate(gI_Llsls(n,n,0:lmax,0:lmax,0:L_max))
+    allocate(gI_Llsls(n,n,0:lmax,0:lmax,0:L_max,nspecies))
 
     allocate(U_l(Nx,n,0:lmax))
-    do ll=0, L_max
+    do is = 1,nspecies
+      do ll=0, L_max
 
-      xpow = sqrt(((gSVDb_vec(1)%xgrid*maxval(rmt(1:nspecies)))**(ll+2))*gSVDb_vec(1)%weights)
-      !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(i,j)
-      do l = 0, lmax
-        do i = 1, n
-          U_l(:, i, l) = gSVDb_vec(l)%basis(:,i)*xpow
+        xpow = sqrt(((gSVDb_vec(1)%xgrid*rmt(is))**(ll+2))*gSVDb_vec(1)%weights)
+        !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(i,j)
+        do l = 0, lmax
+          do i = 1, n
+            U_l(:, i, l) = gSVDb_vec(l)%basis(:,i)*xpow
+          end do
         end do
-      end do
-      !$OMP END PARALLEL DO
+        !$OMP END PARALLEL DO
 
-      do l1 = 0, lmax
-        do l2=0,lmax
-          call dgemm('T', 'N', n, n, Nx, 1._dp, &
-            U_l(:, :, l1), Nx, &
-            U_l(:, :, l2), Nx, &
-            0._dp, gI_Llsls(:, :, l1, l2, ll), n)
+        do l1 = 0, lmax
+          do l2=0,lmax
+            call dgemm('T', 'N', n, n, Nx, 1._dp, &
+              U_l(:, :, l1), Nx, &
+              U_l(:, :, l2), Nx, &
+              0._dp, gI_Llsls(:, :, l1, l2, ll,is), n)
+          end do
         end do
       end do
     end do
@@ -346,7 +348,7 @@ contains
     real(dp), allocatable :: svdfac(:,:) !! Expansion coefficients of sBessel functions of fixed G+K into SVD basis
     real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
     real(dp), allocatable :: jx(:) !! single sBessel function
-    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n
+    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia
     lmax = size(gSVDb_vec)-1
     n = gSVDb_vec(1)%n
     allocate(B(gSVDb_vec(1)%n,lmmaxvr,nstfv,natmtot))
@@ -354,31 +356,36 @@ contains
     allocate(svdfac(gSVDb_vec(1)%n,0:lmax))
     allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
     allocate(jx(gSVDb_vec(1)%Nx))
+
     B = 0._dp
     do igk = 1,Gkqset%ngk(1,ik)
-      ! Generate sBessel functions for fixed G+K
-      call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*maxval(rmt(1:nspecies)), jlx)
+      do is = 1,nspecies
+        ! Generate sBessel functions for fixed G+K
+        call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*rmt(is), jlx)
 
-      ! Express sBessel function into SVD basis
-      do l=0,lmax
-        jx = jlx(l,:)
-        svdfac(:,l) = sqrt(maxval(rmt)) * xToB(gSVDb_vec(l),jx(:))
-      end do
+        ! Express sBessel function into SVD basis
 
-      ! Calculate spherical harmonic values for G+k vec
-      call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
-
-      ! Update the B coefficients for the G+k vec
-      do ias = 1, natmtot
         do l=0,lmax
-          do m=-l,l
-            lm = idxlm(l,m)
-            do ibs = 1,n
-              do ist = 1,nstfv
-                B(ibs ,lm, ist, ias) = B(ibs ,lm, ist, ias) &
-                  + wf%gk(igk,ist) * fourpi * zil(l) &
-                  * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
-                  * svdfac(ibs,l)
+          jx = jlx(l,:)
+          svdfac(:,l) = sqrt(rmt(is)) * xToB(gSVDb_vec(l),jx(:))
+        end do
+
+        ! Calculate spherical harmonic values for G+k vec
+        call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+
+        ! Update the B coefficients for the G+k vec
+        do ia = 1, natoms(is)
+          ias = idxas(ia,is)
+          do l=0,lmax
+            do m=-l,l
+              lm = idxlm(l,m)
+              do ibs = 1,n
+                do ist = 1,nstfv
+                  B(ibs ,lm, ist, ias) = B(ibs ,lm, ist, ias) &
+                    + wf%gk(igk,ist) * fourpi * zil(l) &
+                    * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
+                    * svdfac(ibs,l)
+                end do
               end do
             end do
           end do
@@ -622,32 +629,35 @@ contains
     complex(dp), intent(in) :: B_jk(:,:,:,:)
     complex(dp), intent(out) :: q_nnLM_is(:,:,:,:)
 
-    integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max
+    integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max,ia,is
     lmax = size(gSVDb_vec)-1
     L_max = lmax
     n = gSVDb_vec(1)%n
-    !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ias, l, m, lm, l1, m1, lm1, l2, m2, lm2, ist1, ist2, ibs1, ibs2)
+    !!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(is,ia,ias, l, m, lm, l1, m1, lm1, l2, m2, lm2, ist1, ist2, ibs1, ibs2)
     !ist,ibs,lm,ias
     !ibs ,lm, ist, ias
-    do ias = 1, natmtot
-      do l = 0, L_max
-        do m = -l, l
-          lm = idxlm(l, m)
-          do l1 = 0, lmax
-            do l2 = abs(l-l1),min(lmax,l+l1), 2
-              do m1 = max(-l1,m-l2), min(l1,m+l2)
-                lm1 = idxlm(l1, m1)
-                lm2 = idxlm(l2, m1-m)
-                !if (abs(gntyyy(lm1, lm, lm2)) < 1e-14_dp) cycle  ! skip zeros
-                do ist1 = 1, nstfv
-                  do ist2 = 1, nstfv
-                    do ibs1 = 1, n
-                      do ibs2 = 1, n
-                        q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
-                          + (cmplx(gntyyy(lm, lm2, lm1)) &
-                          * B_ik(ibs1, lm1, ist1, ias) &
-                          * conjg(B_jk(ibs2, lm2, ist2, ias)) &
-                          * cmplx(gI_Llsls(ibs1, ibs2, l1, l2, l)))
+    do is = 1,nspecies
+      do ia = 1,natoms(is)
+        ias = idxas(ia,is)
+        do l = 0, L_max
+          do m = -l, l
+            lm = idxlm(l, m)
+            do l1 = 0, lmax
+              do l2 = abs(l-l1),min(lmax,l+l1), 2
+                do m1 = max(-l1,m-l2), min(l1,m+l2)
+                  lm1 = idxlm(l1, m1)
+                  lm2 = idxlm(l2, m1-m)
+                  !if (abs(gntyyy(lm1, lm, lm2)) < 1e-14_dp) cycle  ! skip zeros
+                  do ist1 = 1, nstfv
+                    do ist2 = 1, nstfv
+                      do ibs1 = 1, n
+                        do ibs2 = 1, n
+                          q_nnLM_is(ist1, ist2, lm, ias) = q_nnLM_is(ist1, ist2, lm, ias) &
+                            + (cmplx(gntyyy(lm, lm2, lm1)) &
+                            * B_ik(ibs1, lm1, ist1, ias) &
+                            * conjg(B_jk(ibs2, lm2, ist2, ias)) &
+                            * cmplx(gI_Llsls(ibs1, ibs2, l1, l2, l,is)))
+                        end do
                       end do
                     end do
                   end do
@@ -658,7 +668,7 @@ contains
         end do
       end do
     end do
-!$OMP END PARALLEL DO
+!!$OMP END PARALLEL DO
     q_nnLM_is = q_nnLM_is / omega
   end subroutine calc_multipoles
 
@@ -1071,8 +1081,8 @@ contains
     end do
 !$OMP END PARALLEL DO
 
-    write(*,*) "Checking B coefficient agreement: ", maxval(abs(B_is-((omega_inv) *B_ik)))
-    write(*,*) "Checking tabulated integral agreement: ", maxval(abs(I_Llsls-gI_Llsls))
+    ! write(*,*) "Checking B coefficient agreement: ", maxval(abs(B_is-((omega_inv) *B_ik)))
+    ! write(*,*) "Checking tabulated integral agreement: ", maxval(abs(I_Llsls-gI_Llsls))
 
 #endif new_loop_1312312
 
@@ -1338,7 +1348,7 @@ contains
     end do
     print *, "Maximum length of G that is used: ", maxval(Gkqset%gkc(:,1,1))
     do l = 0,lmax
-      ! Jāsarēķina sfēriskās Beseļa funkcijas fiksētam l visiem vajadzīgajiem G.
+      ! Jāsarē��ina sfēriskās Beseļa funkcijas fiksētam l visiem vajadzīgajiem G.
       ! Savācam vērtības fiksētam l
       jxG_temp = jlxg_temp(l,:,:)
       ! Sarēķin��m izvirzījumu koeficientus.

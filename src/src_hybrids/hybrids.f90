@@ -431,7 +431,9 @@ Subroutine hybrids
         call flushifc(60)
         call write_vxnl()
       end if
-      exit ! exit ihyb-loop
+      if (ihyb .gt. 1)then
+        exit ! exit ihyb-loop
+      endif
     else
       ! update the reference
       rhomtref(:,:,:) = rhomt(:,:,:)
