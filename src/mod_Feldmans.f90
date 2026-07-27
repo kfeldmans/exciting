@@ -201,8 +201,8 @@ contains
     real(dp), parameter :: minx = 0._dp
     real(dp), parameter :: maxx = 1._dp
     real(dp), parameter :: minG = 0.00000001_dp
-    real(dp), parameter :: maxG = 10._dp
-    integer(i32), parameter :: Nx = 6000
+    real(dp), parameter :: maxG = 18._dp
+    integer(i32), parameter :: Nx = 600
     integer(i32), parameter :: NG = 500
     integer(i32), parameter :: n = 15 !! How many eigenvals & eigenfuncs to keep for representation
     integer(i32), parameter :: lmax = 8 !! Maximum order for spherical Bessel functions
@@ -665,10 +665,10 @@ contains
                           acc = acc + w * B_ik(ibs1, lm1, ist1, ias) * bj
                         end do !ibs1
                       end do !ibs2
-
                     end do  !m1
                   end do !l2
                 end do !l1
+
                 q_nnLM_is(ist1,ist2,lm,ias) = acc / omega
               end do
             end do
@@ -677,8 +677,6 @@ contains
       end do
       !$OMP END PARALLEL DO
     end do
-
-    q_nnLM_is = q_nnLM_is / omega
   end subroutine calc_multipoles
 
 

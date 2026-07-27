@@ -496,7 +496,7 @@ contains
       ngp2=ig + 1
     endif
     call timesec(ta)
-!#define temp_removal_1237123812038120
+#define temp_removal_1237123812038120
 #ifdef temp_removal_1237123812038120
     if (yukawa) then
       call multipoles_ir3( input%groundstate%lmaxvr, ngp2, gpc, &
@@ -515,6 +515,11 @@ contains
 
 ! take difference of muffin-tin and interstitial multipole moments
     qlmir_out = qlmir
+    !write(*,*) "Difference in multipole calcs: " maxval(abs(qlmir-qlmir_in))
+    !if (.not. allocated(qlmir_in)) then
+    ! write(*,*) "Error: qlmir_in not allocated"
+    !endif
+    !write(*,*) "Relative difference: ", maxval(abs(qlmir - qlmir_in))/max(maxval(abs(qlmir)),0.00000001), maxval(abs(qlmir_in)), maxval(abs(qlmir))
     qlmir = qlmir_in
     qlm = qlm - qlmir
 

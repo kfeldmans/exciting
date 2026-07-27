@@ -341,7 +341,6 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     q_nnLM_is = 0._dp
     write(*,*)"q_nnLM_is is allocated:", allocated(q_nnLM_is)
     call calc_multipoles(B_ik,B_jk, q_nnLM_is)
-    write(*,*) "Multipoles calculated"
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
 !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
