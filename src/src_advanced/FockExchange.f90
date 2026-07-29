@@ -46,6 +46,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
   Complex(8) :: rhoG0, potG0
   Real(8) :: time_coul, tc, td, time_fft, time_prod, time_rs, time_misc, time_critical, time_pw
+  real(dp) :: tf1, tf2
 ! automatic arrays
   Real(8) :: zn(nspecies)
   Complex(8) sfacgq0(natmtot)
@@ -294,7 +295,6 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     call genWFonMesh(wf2)
 
     call psi_sphr_SVDb(jk,wf2,B_jk)
-    write(*,*) "284 in FE"
     !--------------------
     ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
     !call set_wf_planewaves(wf2)
@@ -337,13 +337,16 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     time_pw = 0d0
     write(*,*)"B_ik is allocated:", allocated(B_ik)
     write(*,*)"B_jk is allocated:", allocated(B_jk)
-    Allocate (q_nnLM_is(nstfv,nstfv,lmmaxvr,natmtot))
+    Allocate (q_nnLM_is(nstfv,nomax,lmmaxvr,natmtot))
     q_nnLM_is = 0._dp
     write(*,*)"q_nnLM_is is allocated:", allocated(q_nnLM_is)
+    call timesec(tf1)
     call calc_multipoles(B_ik,B_jk, q_nnLM_is)
+    call timesec(tf2)
+    write(*,*) "Multipoles calculated in: ", tf2-tf1
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
     !ist2
 
     !write(*,*)"pēc", OMP_GET_THREAD_NUM()

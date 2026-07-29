@@ -2,6 +2,7 @@ module mod_Feldmans
   ! TO DO:
   ! *) Add generation of SVD basis per species to account for varying MT sizes.
   use modmain
+  use modinput
   use precision, only: dp, i32
   use constants, only: pi
   use mod_sbessel, only: sbessel, sbessel_vec
@@ -26,6 +27,10 @@ module mod_Feldmans
   real(dp), allocatable :: gb(:,:,:,:,:)
   complex(dp), allocatable :: gsvdA(:,:,:) !! coefficients for expanding radial part of WF into SVD basis
   real(dp), allocatable :: gsvdc(:,:,:,:) !! sBessel expansion coefficients in SVD basis
+  real(dp), allocatable :: gntyyy_vFeld(:,:,:)
+  integer, allocatable :: idxlm_vFeld(:,:)
+  integer :: lmax_vFeld
+  integer :: lmmax_vFeld
 
 contains
 
@@ -196,17 +201,17 @@ contains
   subroutine initialise_mod_Feld()
     !! Precomputes SVD basis of sBessel functions,
     !! integrals between basis functions, Gaunt coefficients.
-
+!
     ! Parameters for calculations
     real(dp), parameter :: minx = 0._dp
     real(dp), parameter :: maxx = 1._dp
-    real(dp), parameter :: minG = 0.00000001_dp
-    real(dp), parameter :: maxG = 18._dp
-    integer(i32), parameter :: Nx = 600
+    real(dp), parameter :: minG = 0._dp
+    real(dp), parameter :: maxG = 8._dp
+    integer(i32), parameter :: Nx = 1000
     integer(i32), parameter :: NG = 500
     integer(i32), parameter :: n = 15 !! How many eigenvals & eigenfuncs to keep for representation
-    integer(i32), parameter :: lmax = 8 !! Maximum order for spherical Bessel functions
-    integer(i32), parameter :: L_max = 8 !! Maximum angular momentum to calculate integrals for
+    integer(i32), parameter :: lmax = 12 !! Maximum order for spherical Bessel functions
+    integer(i32) :: L_max  !! Maximum angular momentum to calculate integrals for
 
     ! Grids for calculations with sBessel functions
     real(dp) :: xgrid(Nx)
@@ -222,10 +227,15 @@ contains
     real(dp), allocatable :: jlxg_rayl(:,:,:,:)
 
     ! Loop variables, sizes
-    integer :: idxg, l, lwork, i,j,ll, l1,l2, ikp, ik, igk,is
+    integer :: idxg, l, lwork, i,j,ll, l1,l2, ikp, ik, igk,is,m,lmc
+    real(dp) :: err
 
+    L_max = input%groundstate%lmaxvr
+    lmax_vFeld = lmax
     ! Get radial grid to calculate sBessel functions on.
     call gauss_legendre(xgrid,xweights, interval=[minx,maxx])
+    !xgrid = linspace(minx,maxx,Nx)
+    !xweights = 1._dp/Nx
     ! G-grid is just uniform.
     Ggrid = linspace(minG,maxG,NG)
 
@@ -249,11 +259,12 @@ contains
     ! End Generating the SVD basis------------------------------
 
     ! Make sure Gaunt coefficients are computed-------------------
-    if (.not. allocated(gntyyy)) then
-      call gengntyyy
+    if (.not. allocated(gntyyy_vFeld)) then
+      ! Tatad l=L_max=groundstate%lmaxvr ir otra koordinate, pirma un tresa koordinate ir mod_feld lmax
+      call gengntyyy_vFeld(lmax_vFeld, lmax_vFeld,lmax_vFeld )
     end if
     ! End Make sure Gaunt coefficients are computed---------------
-
+!
     ! Calculate integrals between basis functions------------------
     allocate(gI_Llsls(n,n,0:lmax,0:lmax,0:L_max,nspecies))
 
@@ -281,7 +292,38 @@ contains
       end do
     end do
     deallocate(U_l)
+
+#define testing_3123546513124141
+#ifdef testing_3123546513124141
+    write(*,*) "Testing I_Llsls symmetry"
+    do is = 1, nspecies
+      do L = 0, input%groundstate%lmaxvr
+        do l1 = 0, lmax_vFeld
+          do l2 = 0, lmax_vFeld
+            err = maxval(abs(gI_Llsls(:,:,l1,l2,L,is) - &
+              transpose(gI_Llsls(:,:,l2,l1,L,is))))
+            if (err > 1d-12) then
+              write(*,*) "gI symmetry error:", is,L,l1,l2,err
+            end if
+          end do
+        end do
+      end do
+    end do
+    write(*,*) "Completed testing symmetry"
+#endif testing_3123546513124141
     ! End calculate integrals between basis functions--------------
+
+    if (.not. allocated(idxlm_vFeld)) then
+      allocate(idxlm_vFeld(0:lmax, -lmax:lmax))
+      lmc = 0
+      do l = 0,lmax
+        do m = -l,l
+          lmc = lmc + 1
+          idxlm_vFeld(l,m) = lmc
+        end do
+      end do
+      lmmax_vFeld = lmc
+    end if
 
 !#define testing_8524324716129841
 #ifdef testing_8524324716129841
@@ -339,25 +381,30 @@ contains
     write(*,*) "Finalisation for mod_Feld complete"
   end subroutine finalise_mod_Feld
 
-  subroutine psi_sphr_SVDb(ik,wf,B)
+  subroutine psi_sphr_SVDb(ik,wf,B_out)
     !! Generates the B coefficients for a wavefunction for fixed k-vector.
     integer, intent(in) :: ik !! non-reduced k-vector index of wf.
     type(WFType), intent(in) :: wf !! WFType containing plane-wave expansions of psi.
-    complex(dp), intent(out), allocatable :: B(:,:,:,:) !! Expansions of radial functions of wf harmonic expansion into gSVD bases.
+    complex(dp), intent(out), allocatable :: B_out(:,:,:,:) !! Expansions of radial functions of wf harmonic expansion into gSVD bases.
     complex(dp), allocatable :: ylmgk(:) !! Spherical harmonic values for fixed G+k vec
     real(dp), allocatable :: svdfac(:,:) !! Expansion coefficients of sBessel functions of fixed G+K into SVD basis
     real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
     real(dp), allocatable :: jx(:) !! single sBessel function
+    real(dp), allocatable :: jx_check(:)
+    complex(dp), allocatable :: zil_Local(:)
+    complex(dp) :: zi_Local
     integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia
     lmax = size(gSVDb_vec)-1
     n = gSVDb_vec(1)%n
-    allocate(B(gSVDb_vec(1)%n,lmmaxvr,nstfv,natmtot))
-    allocate(ylmgk(lmmaxvr))
+    allocate(B_out(gSVDb_vec(1)%n,lmmax_vFeld,nstfv,natmtot))
+    allocate(ylmgk(lmmax_vFeld))
     allocate(svdfac(gSVDb_vec(1)%n,0:lmax))
     allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
     allocate(jx(gSVDb_vec(1)%Nx))
+    allocate(zil_Local(0:lmax))
+    !allocate(jx_check(gSVDb_vec(1)%Nx))
 
-    B = 0._dp
+    B_out = 0._dp
     write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
     do igk = 1,Gkqset%ngk(1,ik)
       do is = 1,nspecies
@@ -368,10 +415,17 @@ contains
         do l=0,lmax
           jx = jlx(l,:)
           svdfac(:,l) = sqrt(rmt(is)) * xToB(gSVDb_vec(l),jx(:))
+          !jx_check =  BTox(gSVDb_vec(l),svdfac(:,l))/ sqrt(rmt(is))
+          !write(*,*) "Projection error: ", sum(abs(jx-jx_check)*gSVDb_vec(l)%weights), "l:",l
         end do
 
+        zil_Local(0) = cmplx(1._dp,0._dp,kind=dp)
+        zi_Local = cmplx(0._dp,1._dp,kind = dp)
+        do l=1,lmax
+          zil_Local(l) = zil_Local(l-1) * zi_Local
+        end do
         ! Calculate spherical harmonic values for G+k vec
-        call genylm(input%groundstate%lmaxvr, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+        call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
 
         ! Update the B coefficients for the G+k vec
 !$OMP PARALLEL DO COLLAPSE(3) PRIVATE(ia,ias,ist,l,m,lm,ibs)
@@ -380,10 +434,10 @@ contains
             do l=0,lmax
               ias = idxas(ia,is)
               do m=-l,l
-                lm = idxlm(l,m)
+                lm = idxlm_vFeld(l,m)
                 do ibs = 1,n
-                  B(ibs ,lm, ist, ias) = B(ibs ,lm, ist, ias) &
-                    + wf%gk(igk,ist) * fourpi * zil(l) &
+                  B_out(ibs ,lm, ist, ias) = B_out(ibs ,lm, ist, ias) &
+                    + wf%gk(igk,ist) * fourpi * zil_Local(l) &
                     * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
                     * svdfac(ibs,l)
                 end do
@@ -395,6 +449,56 @@ contains
       end do
     end do
   end subroutine psi_sphr_SVDb
+
+  Subroutine gengntyyy_vFeld(max_l1,max_l2,max_l3) !(gntyyy)
+! !USES:
+!      Use wigner3j_symbol, only : gaunt_yyy
+! !DESCRIPTION:
+!  Gaunt coefficients <Y3 | Y2 | Y1 >.
+!
+!
+! !REVISION HISTORY:
+!   Created January 2004 (JKD)
+!EOP
+!BOC
+    Implicit None
+
+    integer, intent(in) :: max_l1
+    integer, intent(in) :: max_l2
+    integer, intent(in) :: max_l3
+! local variables
+    Integer :: l1, l2, l3, m1, m2, m3, lm1, lm2, lm3
+    real(8), external :: oldgaunt
+
+! external functions
+!      real(8), external :: gaunt_yyy
+!
+! allocate and generate complex Gaunt coefficient array
+!      If (allocated(gntyry)) deallocate (gntyry)
+    write(*,*) "Entered generation"
+    Allocate (gntyyy_vFeld((max_l3+1)**2,(max_l2+1)**2,(max_l1+1)**2))
+    lm1=0
+    Do l1 = 0, max_l1
+      Do m1 = - l1, l1
+        lm1 = lm1 + 1
+        lm2=0
+        Do l2 = 0, max_l3
+          Do m2 = - l2, l2
+            lm2 = lm2+1
+            lm3=0
+            Do l3 = 0, max_l2
+              Do m3 = - l3, l3
+                lm3 = lm3 + 1
+                gntyyy_vFeld (lm2, lm3, lm1) = oldgaunt (l1, l2, l3, m1, m2, m3)
+              End Do
+            End Do
+          End Do
+        End Do
+      End Do
+    End Do
+    write(*,*) "Exiting generation"
+    Return
+  end subroutine gengntyyy_vFeld
 
 
   subroutine testing_calc_2(ikp,wf1)
@@ -635,29 +739,33 @@ contains
 
     integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max,ia,is
     lmax = size(gSVDb_vec)-1
-    L_max = lmax
+    L_max = input%groundstate%lmaxvr
     n = gSVDb_vec(1)%n
-    q_nnLM_is = (0.0_dp, 0.0_dp)
+    q_nnLM_is = 0._dp
     !ist,ibs,lm,ias
     !ibs ,lm, ist, ias
+#define original_34141641273127312
+#ifdef original_34141641273127312
     do is = 1,nspecies
       !$OMP PARALLEL DO COLLAPSE(2) SCHEDULE(static) DEFAULT(shared) PRIVATE(ia,ias, l, m, lm, l1, m1, lm1, l2, lm2, ist1, ist2, ibs1, ibs2,acc,g,w,bj)
       do ia = 1,natoms(is)
         do l = 0, L_max
           ias = idxas(ia,is)
           do m = -l, l
-            lm = idxlm(l, m)
-            do ist2 = 1, nstfv
+            lm = idxlm_vFeld(l, m)
+            do ist2 = 1, nomax
               do ist1 = 1, nstfv
-                acc = (0.0_dp,0.0_dp)
+                acc = 0._dp
 
                 do l1 = 0, lmax
                   do l2 = abs(l-l1),min(lmax,l+l1), 2
                     do m1 = max(-l1,m-l2), min(l1,m+l2)
-                      lm1 = idxlm(l1, m1)
-                      lm2 = idxlm(l2, m1-m)
-                      g = gntyyy(lm,lm2,lm1)
-
+                      lm1 = idxlm_vFeld(l1, m1)
+                      lm2 = idxlm_vFeld(l2, m1-m)
+                      !gntyyy_vFeld (lm2, lm3, lm1) = oldgaunt (l1, l2, l3, m1, m2, m3)
+                      ! Tatad l=L_max=groundstate%lmaxvr ir otra koordinate, pirma un tresa koordinate ir mod_feld lmax
+                      ! base: g = gntyyy_vFeld(lm,lm2,lm1)
+                      g = gntyyy_vFeld(lm,lm2,lm1)
                       do ibs2 = 1, n
                         bj = conjg(B_jk(ibs2, lm2, ist2, ias))
                         do ibs1 = 1, n
@@ -677,6 +785,52 @@ contains
       end do
       !$OMP END PARALLEL DO
     end do
+#endif original_34141641273127312
+
+!#define fullLoop_3137879987237423
+#ifdef fullLoop_3137879987237423
+    do is = 1,nspecies
+      !$OMP PARALLEL DO COLLAPSE(2) SCHEDULE(static) DEFAULT(shared) PRIVATE(ia,ias, l, m, lm, l1, m1, lm1, l2,m2, lm2, ist1, ist2, ibs1, ibs2,acc,g,w,bj)
+      do ia = 1,natoms(is)
+        do l = 0, L_max
+          ias = idxas(ia,is)
+          do m = -l, l
+            lm = idxlm_vFeld(l, m)
+            do ist2 = 1, nomax
+              do ist1 = 1, nstfv
+                acc = (0.0_dp,0.0_dp)
+
+                do l1 = 0, lmax
+                  do l2 = 0,lmax
+                    do m1 = -l1,l1
+                      lm1 = idxlm_vFeld(l1, m1)
+                      do m2=-l2,l2
+                        lm2 = idxlm_vFeld(l2,m2)
+                        !gntyyy_vFeld (lm2, lm3, lm1) = oldgaunt (l1, l2, l3, m1, m2, m3)
+                        ! Tatad l=L_max=groundstate%lmaxvr ir otra koordinate, pirma un tresa koordinate ir mod_feld lmax
+                        ! base: g = gntyyy_vFeld(lm,lm2,lm1)
+                        g = gntyyy_vFeld(lm,lm2,lm1)
+                        do ibs2 = 1, n
+                          bj = conjg(B_jk(ibs2, lm2, ist2, ias))
+                          do ibs1 = 1, n
+                            w = g * gI_Llsls(ibs1, ibs2, l1, l2, l,is)
+                            acc = acc + w * B_ik(ibs1, lm1, ist1, ias) * bj
+                          end do !ibs1
+                        end do !ibs2
+                      end do
+                    end do  !m1
+                  end do !l2
+                end do !l1
+
+                q_nnLM_is(ist1,ist2,lm,ias) = acc / omega
+              end do
+            end do
+          end do
+        end do
+      end do
+      !$OMP END PARALLEL DO
+    end do
+#endif fullLoop_3137879987237423
   end subroutine calc_multipoles
 
 
@@ -1376,7 +1530,7 @@ contains
 
 !#define modFeld1
 #ifdef modFeld1
-! Atrodam, kurām sbese����a funkcijam ir lielie koeficienti.
+! Atrodam, kurām sbese������a funkcijam ir lielie koeficienti.
     do l=0,lmax
       do igk = 1, Gkqset%ngk(1,1)
         if (maxval(abs(svdfac(:,igk,l)))>1._dp) then

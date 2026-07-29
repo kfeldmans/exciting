@@ -21,10 +21,10 @@ module mod_Basis1D
     module procedure zxtoB
   end interface xToB
 
-  interface Btox
+  interface BTox
     module procedure dBTox
     module procedure zBTox
-  end interface Btox
+  end interface BTox
 
 contains
 

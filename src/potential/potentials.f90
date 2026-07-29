@@ -519,7 +519,8 @@ contains
     !if (.not. allocated(qlmir_in)) then
     ! write(*,*) "Error: qlmir_in not allocated"
     !endif
-    !write(*,*) "Relative difference: ", maxval(abs(qlmir - qlmir_in))/max(maxval(abs(qlmir)),0.00000001), maxval(abs(qlmir_in)), maxval(abs(qlmir))
+    !write(*,*) "Max Rel Difference: ", maxval(abs(qlmir - qlmir_in)/(max(abs(qlmir),0.00000000000001_dp)))," New: ", maxval(abs(qlmir_in)), "Old: ",maxval(abs(qlmir))
+
     qlmir = qlmir_in
     qlm = qlm - qlmir
 
