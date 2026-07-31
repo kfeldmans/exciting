@@ -122,8 +122,13 @@ Subroutine hybrids
   If (allocated(rhoirref)) deallocate(rhoirref)
   Allocate (rhoirref(ngrtot))
 !!!MODIFICATIONS BY FELDMANS
-
+  call timesec(ts0)
   call initialise_mod_Feld()
+  call timesec(ts1)
+  if ((input%groundstate%outputlevelnumber>1)) then
+    write(60,*)
+    write(60,'(" CPU time for init mod_Feld (seconds)",T45 ": ", F12.2)') ts1-ts0
+  end if
 
 !!!END MODIFICATIONS BY FELDMANS
   !----------------------

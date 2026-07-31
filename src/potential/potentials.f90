@@ -496,7 +496,7 @@ contains
       ngp2=ig + 1
     endif
     call timesec(ta)
-#define temp_removal_1237123812038120
+!#define temp_removal_1237123812038120
 #ifdef temp_removal_1237123812038120
     if (yukawa) then
       call multipoles_ir3( input%groundstate%lmaxvr, ngp2, gpc, &

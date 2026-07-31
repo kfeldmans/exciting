@@ -253,7 +253,7 @@ contains
       lwork = -1
       call genSVDBasis(Nx,M_tmp,xweights,n,xgrid,work,lwork,gSVDb_vec(l))
     end do
-    write(*,*) "Allocated SVDbasis"
+    !write(*,*) "Allocated SVDbasis"
     deallocate(M_tmp)
     deallocate(jlxG)
     ! End Generating the SVD basis------------------------------
@@ -293,7 +293,7 @@ contains
     end do
     deallocate(U_l)
 
-#define testing_3123546513124141
+!#define testing_3123546513124141
 #ifdef testing_3123546513124141
     write(*,*) "Testing I_Llsls symmetry"
     do is = 1, nspecies
@@ -381,6 +381,7 @@ contains
     write(*,*) "Finalisation for mod_Feld complete"
   end subroutine finalise_mod_Feld
 
+
   subroutine psi_sphr_SVDb(ik,wf,B_out)
     !! Generates the B coefficients for a wavefunction for fixed k-vector.
     integer, intent(in) :: ik !! non-reduced k-vector index of wf.
@@ -394,9 +395,21 @@ contains
     complex(dp), allocatable :: zil_Local(:)
     complex(dp) :: zi_Local
     integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia
+
+!#define original_backup_7087781748187412
+#define optimization_v1_7517109571374991
+
     lmax = size(gSVDb_vec)-1
     n = gSVDb_vec(1)%n
+
+#ifdef original_backup_7087781748187412
     allocate(B_out(gSVDb_vec(1)%n,lmmax_vFeld,nstfv,natmtot))
+#endif original_backup_7087781748187412
+
+#ifdef optimization_v1_7517109571374991
+    allocate(B_out(nstfv,gSVDb_vec(1)%n,lmmax_vFeld,natmtot))
+#endif optimization_v1_7517109571374991
+
     allocate(ylmgk(lmmax_vFeld))
     allocate(svdfac(gSVDb_vec(1)%n,0:lmax))
     allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
@@ -404,7 +417,7 @@ contains
     allocate(zil_Local(0:lmax))
     !allocate(jx_check(gSVDb_vec(1)%Nx))
 
-    B_out = 0._dp
+    B_out = cmplx(0._dp,kind=dp)
     write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
     do igk = 1,Gkqset%ngk(1,ik)
       do is = 1,nspecies
@@ -428,15 +441,18 @@ contains
         call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
 
         ! Update the B coefficients for the G+k vec
-!$OMP PARALLEL DO COLLAPSE(3) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+
+#ifdef original_backup_7087781748187412
+!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
         do ia = 1, natoms(is)
-          do ist = 1,nstfv
-            do l=0,lmax
-              ias = idxas(ia,is)
+          do l=0,lmax
+            ias = idxas(ia,is)
+            do ist = 1,nstfv
               do m=-l,l
                 lm = idxlm_vFeld(l,m)
                 do ibs = 1,n
-                  B_out(ibs ,lm, ist, ias) = B_out(ibs ,lm, ist, ias) &
+
+                  B_out(ibs, lm,ist , ias) = B_out(ibs, lm, ist ,ias) &
                     + wf%gk(igk,ist) * fourpi * zil_Local(l) &
                     * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
                     * svdfac(ibs,l)
@@ -446,6 +462,32 @@ contains
           end do
         end do
 !$OMP END PARALLEL DO
+#endif original_backup_7087781748187412
+
+
+
+#ifdef  optimization_v1_7517109571374991
+!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+        do ia = 1, natoms(is)
+          do l=0,lmax
+            ias = idxas(ia,is)
+
+            do m=-l,l
+              lm = idxlm_vFeld(l,m)
+              do ibs = 1,n
+                do ist = 1,nstfv
+                  B_out(ist ,ibs, lm, ias) = B_out(ist ,ibs, lm, ias) &
+                    + wf%gk(igk,ist) * fourpi * zil_Local(l) &
+                    * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
+                    * svdfac(ibs,l)
+                end do
+              end do
+            end do
+          end do
+        end do
+!$OMP END PARALLEL DO
+#endif optimization_v1_7517109571374991
+
       end do
     end do
   end subroutine psi_sphr_SVDb
@@ -475,7 +517,7 @@ contains
 !
 ! allocate and generate complex Gaunt coefficient array
 !      If (allocated(gntyry)) deallocate (gntyry)
-    write(*,*) "Entered generation"
+    !write(*,*) "Entered generation"
     Allocate (gntyyy_vFeld((max_l3+1)**2,(max_l2+1)**2,(max_l1+1)**2))
     lm1=0
     Do l1 = 0, max_l1
@@ -496,7 +538,7 @@ contains
         End Do
       End Do
     End Do
-    write(*,*) "Exiting generation"
+    !write(*,*) "Exiting generation"
     Return
   end subroutine gengntyyy_vFeld
 
@@ -733,18 +775,27 @@ contains
     complex(dp), intent(in) :: B_ik(:,:,:,:)
     complex(dp), intent(in) :: B_jk(:,:,:,:)
     complex(dp), intent(out) :: q_nnLM_is(:,:,:,:)
-    complex(dp) :: acc,bj
+    complex(dp), allocatable :: temp(:,:)
+    real(dp), allocatable :: Bre(:,:), Bim(:,:), tempre(:,:), tempim(:,:)
+    real(dp), allocatable :: Bre_vec(:,:,:), Bim_vec(:,:,:), tempre_vec(:,:,:), tempim_vec(:,:,:)
+    complex(dp), allocatable :: temp_vec(:,:,:),sum_vec(:,:,:),g_vec(:)
+    complex(dp) :: acc,bj,zone,zzero,omega_inv
     real(dp) :: g, w, gaunt
 
 
-    integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max,ia,is
+    integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max,ia,is,m1_min,m1_max,lm1_min,lm1_max,lm2_min,lm2_max,nlm
     lmax = size(gSVDb_vec)-1
     L_max = input%groundstate%lmaxvr
     n = gSVDb_vec(1)%n
-    q_nnLM_is = 0._dp
+    zone = cmplx(1._dp,0._dp,kind=dp)
+    zzero = cmplx(0._dp,0._dp, kind=dp)
+    omega_inv = cmplx(1/omega,0._dp,kind=dp)
+    q_nnLM_is = cmplx(0._dp,kind=dp)
+    allocate(temp(nstfv,n))
+
     !ist,ibs,lm,ias
     !ibs ,lm, ist, ias
-#define original_34141641273127312
+!#define original_34141641273127312
 #ifdef original_34141641273127312
     do is = 1,nspecies
       !$OMP PARALLEL DO COLLAPSE(2) SCHEDULE(static) DEFAULT(shared) PRIVATE(ia,ias, l, m, lm, l1, m1, lm1, l2, lm2, ist1, ist2, ibs1, ibs2,acc,g,w,bj)
@@ -787,50 +838,100 @@ contains
     end do
 #endif original_34141641273127312
 
-!#define fullLoop_3137879987237423
-#ifdef fullLoop_3137879987237423
+!#define optimization_v1_857257240481943141
+#ifdef optimization_v1_857257240481943141
+    allocate(Bre(nstfv,n),Bim(nstfv,n),tempre(nstfv,n),tempim(nstfv,n))
+
     do is = 1,nspecies
-      !$OMP PARALLEL DO COLLAPSE(2) SCHEDULE(static) DEFAULT(shared) PRIVATE(ia,ias, l, m, lm, l1, m1, lm1, l2,m2, lm2, ist1, ist2, ibs1, ibs2,acc,g,w,bj)
       do ia = 1,natoms(is)
+        ias = idxas(ia,is)
         do l = 0, L_max
-          ias = idxas(ia,is)
+
           do m = -l, l
             lm = idxlm_vFeld(l, m)
-            do ist2 = 1, nomax
-              do ist1 = 1, nstfv
-                acc = (0.0_dp,0.0_dp)
 
-                do l1 = 0, lmax
-                  do l2 = 0,lmax
-                    do m1 = -l1,l1
-                      lm1 = idxlm_vFeld(l1, m1)
-                      do m2=-l2,l2
-                        lm2 = idxlm_vFeld(l2,m2)
-                        !gntyyy_vFeld (lm2, lm3, lm1) = oldgaunt (l1, l2, l3, m1, m2, m3)
-                        ! Tatad l=L_max=groundstate%lmaxvr ir otra koordinate, pirma un tresa koordinate ir mod_feld lmax
-                        ! base: g = gntyyy_vFeld(lm,lm2,lm1)
-                        g = gntyyy_vFeld(lm,lm2,lm1)
-                        do ibs2 = 1, n
-                          bj = conjg(B_jk(ibs2, lm2, ist2, ias))
-                          do ibs1 = 1, n
-                            w = g * gI_Llsls(ibs1, ibs2, l1, l2, l,is)
-                            acc = acc + w * B_ik(ibs1, lm1, ist1, ias) * bj
-                          end do !ibs1
-                        end do !ibs2
-                      end do
-                    end do  !m1
-                  end do !l2
+
+            do l1 = 0, lmax
+              do l2 = abs(l-l1),min(lmax,l+l1), 2
+                do m1 = max(-l1,m-l2), min(l1,m+l2)
+                  lm1 = idxlm_vFeld(l1, m1)
+                  lm2 = idxlm_vFeld(l2, m1-m)
+                  !gntyyy_vFeld (lm2, lm3, lm1) = oldgaunt (l1, l2, l3, m1, m2, m3)
+                  ! Tatad l=L_max=groundstate%lmaxvr ir otra koordinate, pirma un tresa koordinate ir mod_feld lmax
+                  ! base: g = gntyyy_vFeld(lm,lm2,lm1)
+                  g = gntyyy_vFeld(lm,lm2,lm1)
+
+                  ! q_nnLM_is(ist1,ist2,lm,ias) = q_nnLM_is(ist1,ist2,lm,ias) + &
+                  !   gntyyy_vFeld(lm,lm2,lm1)*conjg(B_jk(ist2,ibs2,lm2,ias)) * &
+                  !   B_ik(ist1,ibs1,lm1,ias)*gI_Llsls(ibs1,ibs2,l1,l2,l,is)/omega
+                  Bre = real(B_ik(:,:,lm1,ias), kind = dp)
+                  Bim = aimag(B_ik(:,:,lm1,ias))
+                  call dgemm('N','N', nstfv,n,n,1._dp,Bre,nstfv,gI_Llsls(:,:,l1,l2,l,is),n,0._dp,tempre,nstfv)
+                  call dgemm('N','N', nstfv,n,n,1._dp,Bim,nstfv,gI_Llsls(:,:,l1,l2,l,is),n,0._dp,tempim,nstfv)
+                  temp = cmplx(tempre,tempim,kind=dp)
+                  call zgemm('N','C',nstfv,nomax,n,omega_inv*g,temp,nstfv,B_jk(:,:,lm2,ias),nstfv,zone,q_nnLM_is(:,:,lm,ias),nstfv)
                 end do !l1
 
-                q_nnLM_is(ist1,ist2,lm,ias) = acc / omega
               end do
             end do
           end do
         end do
       end do
-      !$OMP END PARALLEL DO
+
     end do
-#endif fullLoop_3137879987237423
+#endif optimization_v1_857257240481943141
+
+#define optimization_v2_45478643439321247
+#ifdef optimization_v2_45478643439321247
+    allocate(Bre_vec(nstfv,n, 2*lmax+1),Bim_vec(nstfv,n,2*lmax+1),tempre_vec(nstfv,n,2*lmax+1),tempim_vec(nstfv,n,2*lmax+1),temp_vec(nstfv,n,2*lmax+1), sum_vec(nstfv,nomax,2*lmax+1),g_vec(2*lmax+1))
+
+    do is = 1,nspecies
+      do ia = 1,natoms(is)
+        ias = idxas(ia,is)
+        do l = 0, L_max
+
+          do m = -l, l
+            lm = idxlm_vFeld(l, m)
+
+
+            do l1 = 0, lmax
+              do l2 = abs(l-l1),min(lmax,l+l1), 2
+                m1_min = max(-l1,m-l2)
+                m1_max = min(l1,m+l2)
+                lm1_min = idxlm_vFeld(l1,m1_min)
+                lm2_min = idxlm_vFeld(l2,m1_min-m)
+                lm1_max = idxlm_vFeld(l1,m1_max)
+                lm2_max = idxlm_vFeld(l2,m1_max-m)
+                nlm = lm1_max - lm1_min + 1
+                Bre_vec(:,:,1:nlm)=real(B_ik(:,:,lm1_min:lm1_max,ias), kind = dp)
+                Bim_vec(:,:,1:nlm) = aimag(B_ik(:,:,lm1_min:lm1_max,ias))
+                call dgemm_batch_strided('N','N',nstfv,n,n,1._dp,Bre_vec,nstfv,nstfv*n,gI_Llsls(:,:,l1,l2,l,is),n,0,0._dp,tempre_vec,nstfv,nstfv*n,nlm)
+                call dgemm_batch_strided('N','N',nstfv,n,n,1._dp,Bim_vec,nstfv,nstfv*n,gI_Llsls(:,:,l1,l2,l,is),n,0,0._dp,tempim_vec,nstfv,nstfv*n,nlm)
+                temp_vec(:,:,1:nlm) = cmplx(tempre_vec(:,:,1:nlm),tempim_vec(:,:,1:nlm),kind=dp)
+                call zgemm_batch_strided('N','C',nstfv,nomax,n,omega_inv,temp_vec(:,:,1:nlm),nstfv,nstfv*n,B_jk(:,:,lm2_min:lm2_max,ias),nstfv,nstfv*n,zzero,sum_vec(:,:,1:nlm),nstfv,nstfv*nomax,nlm)
+
+                ! do m1 = m1_min,m1_max
+                !   lm1 = idxlm_vFeld(l1,m1)
+                !   lm2 = idxlm_vFeld(l2,m1-m)
+                !   g_vec(m1-m1_min+1) = cmplx(gntyyy_vFeld(lm,lm2,lm1), kind=dp)
+                ! end do
+                do m1 = m1_min,m1_max
+                  lm1 = idxlm_vFeld(l1,m1)
+                  lm2 = idxlm_vFeld(l2,m1-m)
+                  g = gntyyy_vFeld(lm,lm2,lm1)
+                  q_nnLM_is(:,:,lm,ias) = q_nnLM_is(:,:,lm,ias)+  g*sum_vec(:,:,m1-m1_min+1)
+                end do
+
+              end do
+            end do
+
+
+          end do
+        end do
+      end do
+    end do
+
+#endif optimization_v2_45478643439321247
   end subroutine calc_multipoles
 
 

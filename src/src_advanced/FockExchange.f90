@@ -135,9 +135,11 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   call genWF(ik, wf1)
   call genWFinMT(wf1)
   call genWFonMesh(wf1)
-  write(*,*) "start Calculation SVD for wf1"
+
+  call timesec(ta)
   call psi_sphr_SVDb(ik,wf1,B_ik)
-  write(*,*) "end calculation SVD for wf1!"
+  call timesec(tb)
+  if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
   !call hello()
   !call testing(wf1)
 
@@ -294,7 +296,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     call genWFinMT(wf2)
     call genWFonMesh(wf2)
 
-    call psi_sphr_SVDb(jk,wf2,B_jk)
+
     !--------------------
     ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
     !call set_wf_planewaves(wf2)
@@ -303,6 +305,11 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     !----------------
     call timesec(tb)
     if (print_times) write (*, *) 'genWFs :', tb - ta
+
+    call timesec(ta)
+    call psi_sphr_SVDb(jk,wf2,B_jk)
+    call timesec(tb)
+    if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
 
     solver = (input%groundstate%hybrid%singularity .ne. "exc")
 
@@ -335,8 +342,8 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     time_misc = 0d0
     time_critical = 0d0
     time_pw = 0d0
-    write(*,*)"B_ik is allocated:", allocated(B_ik)
-    write(*,*)"B_jk is allocated:", allocated(B_jk)
+    !write(*,*)"B_ik is allocated:", allocated(B_ik)
+    !write(*,*)"B_jk is allocated:", allocated(B_jk)
     Allocate (q_nnLM_is(nstfv,nomax,lmmaxvr,natmtot))
     q_nnLM_is = 0._dp
     write(*,*)"q_nnLM_is is allocated:", allocated(q_nnLM_is)
