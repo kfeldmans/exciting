@@ -117,3 +117,9 @@ xml/excitinginput.xsd
 
 # Ctags tag files
 tags
+
+# Intel Advisor / compiler optimisation reports
+*.optrpt
+*.advixeproj
+*.advidb2
+e000/
