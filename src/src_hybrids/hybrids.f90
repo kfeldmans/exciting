@@ -278,7 +278,7 @@ Subroutine hybrids
                        conv_emp = conv_emp+ dble(vxnl(ik,ik, 1))**2
                 end do
                 write(*,*)conv_emp-conv_old, "convergence criteria--------------"
-                if ((conv_emp-conv_old).lt.1e-5) then
+                if ((conv_emp-conv_old).lt.1e-5 .and. ihyb > 1) then
                         exit
                 end if
                 call flushifc(60)
