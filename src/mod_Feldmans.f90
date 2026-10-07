@@ -12,7 +12,6 @@ module mod_Feldmans
   use mod_Basis1D
   use mod_lattice, only: omega
   use mod_eigenvalue_occupancy
-  use advisor_annotate
   implicit none
   private
   public :: calc_multipoles,hello, testing, testing_calc, &
