@@ -5,70 +5,70 @@
 !
 subroutine calc_vxnl()
 ! !USES:
-  use modmain
-  use mod_hybrids
-  use modfvsystem
-  use modmpi
-  use modinteg
+    use modmain
+    use mod_hybrids
+    use modfvsystem
+    use modmpi
+    use modinteg 
 ! !DESCRIPTION:
 !   Calculates the non-local exchange potential
 !   and the non-local exchange energy for Hartree-Fock based hybrid functionals.
 !
 !EOP
 !BOC
-  implicit none
+    implicit none
 
-  integer(4) :: ikp, ik, jk, iq, ikq
-  integer(4) :: ie12, ie12tot, ie1, ie2, ie3, icg
-  integer(4) :: ist, l, im
-  integer(4) :: i, j, k, jst, ispn
-  integer(4) :: is, ia, ias, ic
-  integer(4) :: n, nmdim, m, mdim
-  integer(4) :: iblk, nblk, mstart, mend
-  real(8)    :: tstart, tend, sxs2, ta, tb
-  complex(8) :: mvm, zt1, vc
-  integer    :: ikfirst, iklast
+    integer(4) :: ikp, ik, jk, iq, ikq
+    integer(4) :: ie12, ie12tot, ie1, ie2, ie3, icg
+    integer(4) :: ist, l, im
+    integer(4) :: i, j, k, jst, ispn
+    integer(4) :: is, ia, ias, ic
+    integer(4) :: n, nmdim, m, mdim
+    integer(4) :: iblk, nblk, mstart, mend
+    real(8)    :: tstart, tend, sxs2, ta, tb
+    complex(8) :: mvm, zt1, vc
+    integer    :: ikfirst, iklast
 
-  integer(4), allocatable :: idxpair(:,:)
-  complex(8), allocatable :: minm(:,:,:)
-  complex(8), allocatable :: evecsv(:,:)
-  complex(8), allocatable :: vnlcv(:,:,:,:)
+    integer(4), allocatable :: idxpair(:,:)
+    complex(8), allocatable :: minm(:,:,:)
+    complex(8), allocatable :: evecsv(:,:)
+    complex(8), allocatable :: vnlcv(:,:,:,:)
 
-  complex(8), external :: zdotc
-  logical :: hybrid
+    complex(8), external :: zdotc
+    logical :: hybrid
 ! allocatables for ACE
-  complex(8), allocatable :: vxpsimt (:, :, :, :), vxpsiir(:, :)
-  integer :: lcore
-  real(8) ,allocatable :: psi_core(:),vxpsi_core(:)
-  real(8) :: t1
+    complex(8), allocatable :: vxpsimt (:, :, :, :), vxpsiir(:, :)
+    integer :: lcore
+    real(8) ,allocatable :: psi_core(:),vxpsi_core(:)
+    real(8) :: t1
 
-  call cpu_time(tstart)
+    call cpu_time(tstart)
 
-  !----------------------------------------
-  ! Read KS eigenvalues from file EVALSV.OUT
-  !----------------------------------------
-  if (allocated(evalfv)) deallocate(evalfv)
-  allocate(evalfv(nstfv,kset%nkpt))
-  evalfv(:,:) = 0.d0
-  do ik = 1, nkpt
-    call getevalfv(kset%vkl(:,ik), evalfv(:,ik))
-  end do
+    !----------------------------------------
+    ! Read KS eigenvalues from file EVALSV.OUT
+    !----------------------------------------
+    if (allocated(evalfv)) deallocate(evalfv)
+    allocate(evalfv(nstfv,kset%nkpt))
+    evalfv(:,:) = 0.d0
+    do ik = 1, nkpt
+      call getevalfv(kset%vkl(:,ik), evalfv(:,ik))
+    end do
 
-  ! VB / CB state index
-  call find_vbm_cbm(1, nstfv, kset%nkpt, evalfv, efermi, nomax, numin, ikvbm, ikcbm, ikvcm)
-  ! write(*,*) 'calc_vxnl: ', nomax, numin, efermi
+    ! VB / CB state index
+    call find_vbm_cbm(1, nstfv, kset%nkpt, evalfv, efermi, nomax, numin, ikvbm, ikcbm, ikvcm)
+    ! write(*,*) 'calc_vxnl: ', nomax, numin, efermi
 
-  ! BZ integration weights
-  call kintw()
-  deallocate(evalfv)
+    ! BZ integration weights
+    call kintw()
+    deallocate(evalfv)
 
-  ! singular term prefactor
-  sxs2 = 4.d0*pi*vi*singc2*kqset%nkpt
-  if (input%groundstate%hybrid%method.eq."MB") then
+    ! singular term prefactor
+    sxs2 = 4.d0*pi*vi*singc2*kqset%nkpt 
+if (input%groundstate%hybrid%method.eq."MB") then
 
 
     if ((input%gw%coreflag=='all').or. &
-      (input%gw%coreflag=='xal')) then
+        (input%gw%coreflag=='xal')) then
       mdim = nomax+ncg
     else
       mdim = nomax
@@ -143,7 +143,7 @@ subroutine calc_vxnl()
           if ((input%groundstate%outputlevelnumber>1) .and.rank==0) then
             write(60,'(a,3i8)')  '    ---> rank, ikp, iq = ', rank, ikp, iq
             write(60,'(a,4i8)') '    locmatsiz, ngk, matsiz, mbsiz:', &
-              locmatsiz, Gqset%ngk(1,iq), matsiz, mbsiz
+                                locmatsiz, Gqset%ngk(1,iq), matsiz, mbsiz
           end if
 
           !------------------------------------------------------------
@@ -168,7 +168,7 @@ subroutine calc_vxnl()
             if ((input%groundstate%outputlevelnumber>1) .and.rank==0) then
               msize = sizeof(minmmat)*b2mb
               write(60,'(a,3i8,f14.2)') '    iblk, mstart, mend, size(minm) (Mb):', &
-                iblk, mstart, mend, msize
+                                        iblk, mstart, mend, msize
             end if
 
             !---------------------
@@ -247,8 +247,8 @@ subroutine calc_vxnl()
 
 #ifdef MPI
     call MPI_ALLREDUCE(MPI_IN_PLACE, vxnl, nstfv*nstfv*kset%nkpt,  &
-      MPI_DOUBLE_COMPLEX,  MPI_SUM, &
-      MPI_COMM_WORLD, ierr)
+                       MPI_DOUBLE_COMPLEX,  MPI_SUM, &
+                       MPI_COMM_WORLD, ierr)
 #endif
 
     exnl = 0.d0
@@ -265,79 +265,79 @@ subroutine calc_vxnl()
 
 
 
-  else ! Use oepvnl
+else ! Use oepvnl
 
-    ! hybrid = .False.
-    ! if (input%groundstate%hybrid%singularity.ne."exc") then
-    !hybrid = .True.
-    !write(*,*)"calc_vx hybrid", hybrid
-    !end if
-
-
-    if (input%groundstate%hybrid%singularity.ne."exc") sxs2=0.d0
-    !if (input%groundstate%vha.eq."psolver0d") sxs2=0d0
-
-    if (allocated(vxnl)) deallocate(vxnl)
-    allocate(vxnl(nstfv,nstfv,kset%nkpt))
-    allocate(vxpsiir (ngkmax, nstsv))
-    allocate(vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv))
-    vxnl(:,:,:) = zzero
+     ! hybrid = .False.
+     ! if (input%groundstate%hybrid%singularity.ne."exc") then
+        !hybrid = .True.
+       !write(*,*)"calc_vx hybrid", hybrid
+      !end if
 
 
-    allocate(evalfv(nstfv,kset%nkpt))
-    evalfv(:,:) = 0.d0
-    do ik = 1, nkpt
-      call getevalfv(kset%vkl(:,ik), evalfv(:,ik))
-    end do
+      if (input%groundstate%hybrid%singularity.ne."exc") sxs2=0.d0
+      !if (input%groundstate%vha.eq."psolver0d") sxs2=0d0
 
-    ! VB / CB state index
-    call find_vbm_cbm(1, nstfv, kset%nkpt, evalfv, efermi, nomax, numin, ikvbm, ikcbm, ikvcm)
-
-    ! BZ integration weights
-    call kintw()
-    deallocate(evalfv)
+      if (allocated(vxnl)) deallocate(vxnl)
+      allocate(vxnl(nstfv,nstfv,kset%nkpt))
+      allocate(vxpsiir (ngkmax, nstsv))
+      allocate(vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv))
+      vxnl(:,:,:) = zzero
 
 
-#ifdef MPI
-    Do ik = firstk (rank, nkpt), lastk (rank, nkpt)
-#else
-    Do ik = 1, nkpt
-#endif
-      vxpsiir=zzero
-      vxpsimt=zzero
-      if (input%groundstate%Hybrid%updateRadial) then
-        !!!!!!!veca baze!!!!!!!
-        apwfr=apwfr_old
-        lofr=lofr_old
-        !!!!!!!!!!!!!!!!!!!!!!!
-      endif
-      call timesec(ta)
-      call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,vxpsimt)
-      call timesec(tb)
-      if (input%groundstate%Hybrid%updateRadial) then
-        !!!!!!!jauna baze!!!!!!!
-        apwfr=apwfr_new
-        lofr=lofr_new
-        !!!!!!!!!!!!!!!!!!!!!!!
-      endif
-      if (rank==0) write(*,*) 'FockExchange :',tb-ta
-
-      do ie1 = 1, nstfv
-! making sure that the exchange matrix is Hermitian
-        do ie2 = ie1+1, nstfv
-          vxnl(ie2,ie1,ik) = conjg(vxnl(ie1,ie2,ik))
-        end do
+      allocate(evalfv(nstfv,kset%nkpt))
+      evalfv(:,:) = 0.d0
+      do ik = 1, nkpt
+        call getevalfv(kset%vkl(:,ik), evalfv(:,ik))
       end do
 
-      call timesec(ta)
-      call calcACE (ik, vxnl(:, :, ik),vxpsiir,vxpsimt)
-      call timesec(tb)
-      if (rank==0) write(*,*) 'calcACE :',tb-ta
+      ! VB / CB state index
+      call find_vbm_cbm(1, nstfv, kset%nkpt, evalfv, efermi, nomax, numin, ikvbm, ikcbm, ikvcm)
 
-    End Do
+      ! BZ integration weights 
+      call kintw()
+      deallocate(evalfv)
+
 
 #ifdef MPI
-    call MPI_ALLREDUCE(MPI_IN_PLACE, vxnl , nstsv*nstsv*nkpt, MPI_DOUBLE_COMPLEX,  MPI_SUM, MPI_COMM_WORLD, ierr)
+      Do ik = firstk (rank, nkpt), lastk (rank, nkpt)
+#else
+      Do ik = 1, nkpt
+#endif
+        vxpsiir=zzero
+        vxpsimt=zzero
+        if (input%groundstate%Hybrid%updateRadial) then        
+          !!!!!!!veca baze!!!!!!!
+          apwfr=apwfr_old
+          lofr=lofr_old
+          !!!!!!!!!!!!!!!!!!!!!!!
+        endif
+        call timesec(ta)
+        call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,vxpsimt)
+        call timesec(tb)
+        if (input%groundstate%Hybrid%updateRadial) then 
+          !!!!!!!jauna baze!!!!!!!
+          apwfr=apwfr_new
+          lofr=lofr_new
+          !!!!!!!!!!!!!!!!!!!!!!!
+        endif
+        if (rank==0) write(*,*) 'FockExchange :',tb-ta
+
+        do ie1 = 1, nstfv
+! making sure that the exchange matrix is Hermitian 
+          do ie2 = ie1+1, nstfv
+            vxnl(ie2,ie1,ik) = conjg(vxnl(ie1,ie2,ik))
+          end do
+        end do
+
+        call timesec(ta)
+        call calcACE (ik, vxnl(:, :, ik),vxpsiir,vxpsimt)
+        call timesec(tb)
+        if (rank==0) write(*,*) 'calcACE :',tb-ta
+
+      End Do
+
+#ifdef MPI
+      call MPI_ALLREDUCE(MPI_IN_PLACE, vxnl , nstsv*nstsv*nkpt, MPI_DOUBLE_COMPLEX,  MPI_SUM, MPI_COMM_WORLD, ierr)
 #endif
 
 
@@ -383,32 +383,32 @@ subroutine calc_vxnl()
 
 
 
-  endif
+endif
 
 
 
 
-  if (.false.) then
+if (.false.) then
 
-    do ikp = 1, kset%nkpt
-      Write(*,*) "ikp:", ikp, "kset%nkpt:", kset%nkpt,"nomax:",nomax
-      write(*,*) 'vxnl real (1:nomax,1:nomax)'
-      do ie1 = 1, min(nstsv,14)
-        write(*,'(14F13.9)') dble(vxnl(ie1,1:min(nstsv,14),ikp))
-      end do
-
-      ! write(*,*) 'vnlvv imag (1:nstfv,1:nstfv)--'
-      ! do ist1 = 1, min(nstfv,14)
-      !    write(*,'(14F13.9)') dimag(vnlvv(ist1,1:min(nstfv,14)))
-      ! end do
-    enddo
-  end if
+do ikp = 1, kset%nkpt
+  Write(*,*) "ikp:", ikp, "kset%nkpt:", kset%nkpt,"nomax:",nomax
+  write(*,*) 'vxnl real (1:nomax,1:nomax)'
+  do ie1 = 1, min(nstsv,14)
+     write(*,'(14F13.9)') dble(vxnl(ie1,1:min(nstsv,14),ikp))
+  end do
+  
+  ! write(*,*) 'vnlvv imag (1:nstfv,1:nstfv)--'
+  ! do ist1 = 1, min(nstfv,14)
+  !    write(*,'(14F13.9)') dimag(vnlvv(ist1,1:min(nstfv,14)))
+  ! end do
+enddo
+end if
 
 !write(*,*)"calc_vxnl Stop"
 !stop
 
 
 
-  call cpu_time(tend)
-  return
+    call cpu_time(tend)
+    return
 end subroutine calc_vxnl

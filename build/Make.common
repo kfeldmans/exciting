@@ -69,8 +69,8 @@ SOURCEDIRS=	\
   ../../src/isdf \
   ../../src/src_xs/fastBSE \
   ../../src/src_xs/fastBSE/utils \
-  ../../src/src_xs/fastBSE/BSH
-  
+  ../../src/src_xs/fastBSE/BSH 
+		
 		
 GeneratedFiles = ../../src/src_inputparser/inputmodules.f90 ../../src/src_inputparser/speciesmodules.f90
 

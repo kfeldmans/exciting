@@ -6,69 +6,69 @@
 
 !
 !
-!> muffin-tin radial mesh and angular momentum variables
+!> muffin-tin radial mesh and angular momentum variables  
 Module mod_muffin_tin
   use precision, only: dp
-  use constants, only: maxspecies
-  implicit none
+      use constants, only: maxspecies
+      implicit none
 
 ! radial function integration and differentiation polynomial order
 !replaced by inputstructureinteger::nprad
 ! number of muffin-tin radial points for each species
-  Integer :: nrmt (maxspecies)
+      Integer :: nrmt (maxspecies)
 ! maximum nrmt over all the species
-  Integer :: nrmtmax
-! index of species with fixed rmt
-  Integer :: idx_species_fixed_rmt
+      Integer :: nrmtmax
+! index of species with fixed rmt 
+      Integer :: idx_species_fixed_rmt 
 ! muffin-tin radii
-  Real (8) :: rmt (maxspecies)
+      Real (8) :: rmt (maxspecies)
 
 ! species for which the muffin-tin radius will be used for calculating gkmax
 !replaced by inputstructureinteger::isgkmax
 ! radial step length for coarse mesh
 !replaced by inputstructureinteger::lradstp
 ! number of coarse radial mesh points
-  Integer :: nrcmt (maxspecies)
+      Integer :: nrcmt (maxspecies)
 ! maximum nrcmt over all the species
-  Integer :: nrcmtmax
+      Integer :: nrcmtmax
 ! coarse muffin-tin radial mesh
-  Real (8), Allocatable :: rcmt (:, :)
+      Real (8), Allocatable :: rcmt (:, :)
 ! maximum allowable angular momentum for augmented plane waves
 !
 ! maximum angular momentum for augmented plane waves
 ! (2*lmaxapw+1)^2
-  Integer :: lmmaxhf
+      Integer :: lmmaxhf
 ! maximum number for grid points in Lebedev Laikov
-  Integer :: ntpll
+      Integer :: ntpll
 ! maximum angular momentum for augmented plane waves
 !replaced by inputstructureinteger::lmaxapw
 ! (lmaxapw+1)^2
-  Integer :: lmmaxapw
+      Integer :: lmmaxapw
 ! maximum angular momentum for potentials and densities
 !replaced by inputstructureinteger::lmaxvr
 ! (lmaxvr+1)^2
-  Integer :: lmmaxvr
+      Integer :: lmmaxvr
 ! maximum angular momentum used when evaluating the Hamiltonian matrix elements
 !replaced by inputstructureinteger::lmaxmat
 ! (lmaxmat+1)^2
-  Integer :: lmmaxmat
+      Integer :: lmmaxmat
 ! fraction of muffin-tin radius which constitutes the inner part
 !replaced by inputstructurereal(8)::fracinr
 ! maximum angular momentum in the inner part of the muffin-int
 !replaced by inputstructureinteger::lmaxinr
 ! (lmaxinr+1)^2
-  Integer :: lmmaxinr
+      Integer :: lmmaxinr
 ! number of radial points to the inner part of the muffin-tin
-  Integer :: nrmtinr (maxspecies)
+      Integer :: nrmtinr (maxspecies)
 ! index to (l,m) pairs
-  Integer, Allocatable :: idxlm (:, :)
+      Integer, Allocatable :: idxlm (:, :)
 !------------------------------!
 !     tolerance parameters     !
 !------------------------------!
 ! energy convergence tolerance for Dirac equation solver
-  Real (8) :: epsedirac
+      Real (8) :: epsedirac
 ! potential convergence tolerance for atomistic calculation
-  Real (8) :: epspotatom
+      Real (8) :: epspotatom
 
 
 end module mod_muffin_tin
