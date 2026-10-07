@@ -21,7 +21,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
   use mod_Feldmans, only: calc_multipoles, hello, testing, &
     testing_calc, set_wf_planewaves, &
-    testing_calc_2, psi_sphr_SVDb
+    testing_calc_2, psi_sphr_SVDb, psi_sphr_SVDb_v2, psi_sphr_SVDb_v3,psi_sphr_SVDb_v4
 
   Implicit None
 ! arguments
@@ -45,7 +45,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   Integer :: nr, l, m, io1, lm2, ir, if3, j, lmaxvr, ipt
 
   Complex(8) :: rhoG0, potG0
-  Real(8) :: time_coul, tc, td, time_fft, time_prod, time_rs, time_misc, time_critical, time_pw
+  Real(8) :: time_coul, tc, td, time_fft, time_prod, time_rs, time_misc, time_critical, time_pw, time_qlm, time_omp
   real(dp) :: tf1, tf2
 ! automatic arrays
   Real(8) :: zn(nspecies)
@@ -137,9 +137,12 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   call genWFonMesh(wf1)
 
   call timesec(ta)
-  call psi_sphr_SVDb(ik,wf1,B_ik)
+  !call psi_sphr_SVDb_v3(ik,wf1,B_ik)
+  call psi_sphr_SVDb_v4(ik,wf1,B_ik)
+  !write(*,*) "Max compute diff: ", maxval(abs(B_ik - B_jk))
   call timesec(tb)
   if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
+  !stop
   !call hello()
   !call testing(wf1)
 
@@ -307,7 +310,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     if (print_times) write (*, *) 'genWFs :', tb - ta
 
     call timesec(ta)
-    call psi_sphr_SVDb(jk,wf2,B_jk)
+    call psi_sphr_SVDb_v3(jk,wf2,B_jk)
     call timesec(tb)
     if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
 
@@ -342,6 +345,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     time_misc = 0d0
     time_critical = 0d0
     time_pw = 0d0
+    time_omp = 0d0
     !write(*,*)"B_ik is allocated:", allocated(B_ik)
     !write(*,*)"B_jk is allocated:", allocated(B_jk)
     Allocate (q_nnLM_is(nstfv,nomax,lmmaxvr,natmtot))
@@ -351,9 +355,11 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     call calc_multipoles(B_ik,B_jk, q_nnLM_is)
     call timesec(tf2)
     write(*,*) "Multipoles calculated in: ", tf2-tf1
+
+    call timesec(tb) ! Reset time counter for omp_loop
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
     !ist2
 
     !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -364,6 +370,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     time_misc = 0d0
     time_critical = 0d0
     time_pw = 0d0
+    time_qlm = 0d0
     call WFInit(prod)
     call WFInit(pot)
 
@@ -394,7 +401,11 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       time_fft = time_fft + td - tc
 !$OMP DO SCHEDULE(DYNAMIC)
       Do ist3 = 1, nstfv!1,1!!
+        call timesec(tc)
         qlmir_new(:,:) = q_nnLM_is(ist3,ist2,:,:)
+        call timesec(td)
+        time_qlm = td-tc + time_qlm
+
         vxpsiirtmp(:) = 0.d0
         call timesec(tc)
         wf1ir(:) = 0.d0
@@ -621,8 +632,9 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     Deallocate (potmt0)
     Deallocate (vxpsiirtmp)
     Deallocate (vxpsigktmp)
-    deallocate(qlmir)
-    deallocate(qlmir_new)
+    if (allocated(qlmir)) deallocate(qlmir)
+
+    !deallocate(qlmir_new)
 !$OMP END PARALLEL
     deallocate (q_nnLM_is)
 
@@ -636,6 +648,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       write (*, *) '  time_rs :', time_rs
       write (*, *) '  time_critical :', time_critical
       write (*, *) '  time_pw :', time_pw
+      write(*,*) '  time_qlm :', time_qlm
     end if
     vxpsimt = vxpsimt + zvclmt
   End Do ! non-reduced k-point set
@@ -659,7 +672,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Do ia = 1, natoms(is)
         ias = idxas(ia, is)
 !$OMP DO SCHEDULE(DYNAMIC)
-        ! Begin loop over occupied   and empty states
+        ! Begin loop over occupied   and empty states!!
         Do ist3 = 1, nstsv
           Do ist2 = 1, spnst(is) !This is essentially ncore(is)
             If (spcore(ist2, is)) Then
@@ -815,7 +828,7 @@ Subroutine FockExchange(ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
     deallocate(q_nnLM_is)
   end if
 
-  !write(*,*)"FockExchange.f90 stop"
+  !write(*,*)"FockExchange.f90 stop"!
   !stop
   Return
 end subroutine FockExchange

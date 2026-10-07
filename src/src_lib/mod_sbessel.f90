@@ -13,11 +13,11 @@ contains
     real(dp), intent(out) :: jl(0:lmax,size(vec)) !! Values of spherical Bessel functions
     integer(i32) :: i
 
-    !$OMP PARALLEL DO COLLAPSE(1) PRIVATE(i)
+    !!$OMP PARALLEL DO COLLAPSE(1) PRIVATE(i)
     do i=1,size(vec)
       call sbessel(lmax,vec(i),jl(:,i))
     end do
-    !$OMP END PARALLEL DO
+    !!$OMP END PARALLEL DO
   end subroutine sbessel_vec
 !
 !

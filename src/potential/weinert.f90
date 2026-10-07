@@ -1726,7 +1726,7 @@ contains
     integer, intent(in) :: igfft(:)
     !> Fourier components \(\hat{f}({\bf G+p})\) of the function on the FFT grid
     complex(dp), intent(in) :: zvclir(:)
-    !> multipole moments of the function's extension inside the muffin-tin spheres
+    !> multipole moments of the function's extension inside the muffin-tin spheres!
     complex(dp), intent(out) :: qi(:,:)
     complex(dp),optional, intent(in) :: zlambda
     complex(dp),optional, intent(in) :: zilmt(0:,:)

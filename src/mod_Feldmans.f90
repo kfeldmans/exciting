@@ -12,10 +12,11 @@ module mod_Feldmans
   use mod_Basis1D
   use mod_lattice, only: omega
   use mod_eigenvalue_occupancy
+  use advisor_annotate
   implicit none
   private
   public :: calc_multipoles,hello, testing, testing_calc, &
-    set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld, psi_sphr_SVDb
+    set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld, psi_sphr_SVDb, psi_sphr_SVDb_v2, psi_sphr_SVDb_v3, psi_sphr_SVDb_v4
 
   ! Ripped from Fortran stdlib
   real(dp), parameter :: tolerance = 4._dp*epsilon(1._dp)
@@ -24,6 +25,7 @@ module mod_Feldmans
   ! Global values to be accessed for computations in mod_Feldmans
   Type(Basis1D), allocatable :: gSVDb_vec(:)
   real(dp), allocatable :: gI_Llsls(:,:,:,:,:,:)
+  complex(dp), allocatable :: zgI_Llsls(:,:,:,:,:,:)
   real(dp), allocatable :: gb(:,:,:,:,:)
   complex(dp), allocatable :: gsvdA(:,:,:) !! coefficients for expanding radial part of WF into SVD basis
   real(dp), allocatable :: gsvdc(:,:,:,:) !! sBessel expansion coefficients in SVD basis
@@ -206,7 +208,7 @@ contains
     real(dp), parameter :: minx = 0._dp
     real(dp), parameter :: maxx = 1._dp
     real(dp), parameter :: minG = 0._dp
-    real(dp), parameter :: maxG = 8._dp
+    real(dp) :: maxG
     integer(i32), parameter :: Nx = 1000
     integer(i32), parameter :: NG = 500
     integer(i32), parameter :: n = 15 !! How many eigenvals & eigenfuncs to keep for representation
@@ -232,6 +234,7 @@ contains
 
     L_max = input%groundstate%lmaxvr
     lmax_vFeld = lmax
+    maxG = maxval(Gkqset%gkc(:,1,:))
     ! Get radial grid to calculate sBessel functions on.
     call gauss_legendre(xgrid,xweights, interval=[minx,maxx])
     !xgrid = linspace(minx,maxx,Nx)
@@ -245,6 +248,9 @@ contains
     do idxg = 1,NG
       call sbessel_vec(lmax,maxval(rmt(1:nspecies))*xgrid*Ggrid(idxg), jlxG(:,:,idxg))
     end do
+    write(*,*) "The minimum radius of MT: ", minval(rmt(1:nspecies))
+    write(*,*) "The rgkmax: ", input%groundstate%rgkmax
+
     ! Calculate the SVD basis for each order of sBessel functions
     allocate(gSVDb_vec(0:lmax))
     allocate(M_tmp(Nx,NG))
@@ -266,8 +272,7 @@ contains
     ! End Make sure Gaunt coefficients are computed---------------
 !
     ! Calculate integrals between basis functions------------------
-    allocate(gI_Llsls(n,n,0:lmax,0:lmax,0:L_max,nspecies))
-
+    allocate(gI_Llsls(n,n,0:lmax,0:lmax,0:L_max,nspecies),zgI_Llsls(n,n,0:lmax,0:lmax,0:L_max,nspecies))
     allocate(U_l(Nx,n,0:lmax))
     do is = 1,nspecies
       do ll= 0, L_max
@@ -287,6 +292,7 @@ contains
               U_l(:, :, l1), Nx, &
               U_l(:, :, l2), Nx, &
               0._dp, gI_Llsls(:, :, l1, l2, ll,is), n)
+            zgI_Llsls(:, :, l1, l2, ll,is) = cmplx(gI_Llsls(:, :, l1, l2, ll,is), kind=dp)
           end do
         end do
       end do
@@ -398,7 +404,7 @@ contains
 
 !#define original_backup_7087781748187412
 #define optimization_v1_7517109571374991
-
+!#define optimization_v2_7805481094809184
     lmax = size(gSVDb_vec)-1
     n = gSVDb_vec(1)%n
 
@@ -419,7 +425,17 @@ contains
 
     B_out = cmplx(0._dp,kind=dp)
     write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
+    zil_Local(0) = cmplx(1._dp,0._dp,kind=dp)
+    zi_Local = cmplx(0._dp,1._dp,kind = dp)
+    do l=1,lmax
+      zil_Local(l) = zil_Local(l-1) * zi_Local
+    end do
+
+    ! Update the B coefficients for the G+k vec
     do igk = 1,Gkqset%ngk(1,ik)
+      ! Calculate spherical harmonic values for G+k vec
+      call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+
       do is = 1,nspecies
         ! Generate sBessel functions for fixed G+K
         call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*rmt(is), jlx)
@@ -431,16 +447,9 @@ contains
           !jx_check =  BTox(gSVDb_vec(l),svdfac(:,l))/ sqrt(rmt(is))
           !write(*,*) "Projection error: ", sum(abs(jx-jx_check)*gSVDb_vec(l)%weights), "l:",l
         end do
+!
 
-        zil_Local(0) = cmplx(1._dp,0._dp,kind=dp)
-        zi_Local = cmplx(0._dp,1._dp,kind = dp)
-        do l=1,lmax
-          zil_Local(l) = zil_Local(l-1) * zi_Local
-        end do
-        ! Calculate spherical harmonic values for G+k vec
-        call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
 
-        ! Update the B coefficients for the G+k vec
 
 #ifdef original_backup_7087781748187412
 !$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
@@ -451,7 +460,6 @@ contains
               do m=-l,l
                 lm = idxlm_vFeld(l,m)
                 do ibs = 1,n
-
                   B_out(ibs, lm,ist , ias) = B_out(ibs, lm, ist ,ias) &
                     + wf%gk(igk,ist) * fourpi * zil_Local(l) &
                     * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
@@ -467,7 +475,7 @@ contains
 
 
 #ifdef  optimization_v1_7517109571374991
-!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+!!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
         do ia = 1, natoms(is)
           do l=0,lmax
             ias = idxas(ia,is)
@@ -485,12 +493,370 @@ contains
             end do
           end do
         end do
-!$OMP END PARALLEL DO
+!!$OMP END PARALLEL DO
 #endif optimization_v1_7517109571374991
 
       end do
     end do
   end subroutine psi_sphr_SVDb
+
+  subroutine psi_sphr_SVDb_v2(ik,wf,B_out)
+    !! Generates the B coefficients for a wavefunction for fixed k-vector.
+    integer, intent(in) :: ik !! non-reduced k-vector index of wf.
+    type(WFType), intent(in) :: wf !! WFType containing plane-wave expansions of psi.
+    complex(dp), intent(out), allocatable :: B_out(:,:,:,:) !! Expansions of radial functions of wf harmonic expansion into gSVD bases.
+    complex(dp), allocatable :: ylmgk(:) !! Spherical harmonic values for fixed G+k vec
+    real(dp), allocatable :: svdfac(:,:) !! Expansion coefficients of sBessel functions of fixed G+K into SVD basis
+    real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
+    real(dp), allocatable :: jx(:) !! single sBessel function
+    real(dp), allocatable :: jx_check(:)
+    complex(dp), allocatable :: wfgk_slice(:)
+    complex(dp), allocatable :: zil_Local(:)
+    complex(dp) :: zi_Local
+    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia
+
+!#define original_backup_7087781748187412
+#define optimization_v1_7517109571374991
+!#define optimization_v2_7805481094809184
+    lmax = size(gSVDb_vec)-1
+    n = gSVDb_vec(1)%n
+
+#ifdef original_backup_7087781748187412
+    allocate(B_out(gSVDb_vec(1)%n,lmmax_vFeld,nstfv,natmtot))
+#endif original_backup_7087781748187412
+
+#ifdef optimization_v1_7517109571374991
+    allocate(B_out(nstfv,gSVDb_vec(1)%n,lmmax_vFeld,natmtot))
+#endif optimization_v1_7517109571374991
+
+    allocate(ylmgk(lmmax_vFeld))
+    allocate(svdfac(gSVDb_vec(1)%n,0:lmax))
+    allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
+    allocate(jx(gSVDb_vec(1)%Nx))
+    allocate(zil_Local(0:lmax))
+    !allocate(jx_check(gSVDb_vec(1)%Nx))
+
+    B_out = cmplx(0._dp,kind=dp)
+    write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
+    zil_Local(0) = cmplx(1._dp,0._dp,kind=dp)
+    zi_Local = cmplx(0._dp,1._dp,kind = dp)
+    do l=1,lmax
+      zil_Local(l) = zil_Local(l-1) * zi_Local
+    end do
+
+    ! Update the B coefficients for the G+k vec
+    allocate(wfgk_slice(nstfv))
+    do igk = 1,Gkqset%ngk(1,ik)
+      wfgk_slice(:) = wf%gk(igk,:)
+      ! Calculate spherical harmonic values for G+k vec
+      call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+
+      do is = 1,nspecies
+        ! Generate sBessel functions for fixed G+K
+        call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*rmt(is), jlx)
+        ! Express sBessel function into SVD basis
+
+        do l=0,lmax
+          jx = jlx(l,:)
+          svdfac(:,l) = sqrt(rmt(is)) * xToB(gSVDb_vec(l),jx(:))
+          !jx_check =  BTox(gSVDb_vec(l),svdfac(:,l))/ sqrt(rmt(is))
+          !write(*,*) "Projection error: ", sum(abs(jx-jx_check)*gSVDb_vec(l)%weights), "l:",l
+        end do
+!
+
+
+
+#ifdef original_backup_7087781748187412
+!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+        do ia = 1, natoms(is)
+          do l=0,lmax
+            ias = idxas(ia,is)
+            do ist = 1,nstfv
+              do m=-l,l
+                lm = idxlm_vFeld(l,m)
+                do ibs = 1,n
+                  B_out(ibs, lm,ist , ias) = B_out(ibs, lm, ist ,ias) &
+                    + wf%gk(igk,ist) * fourpi * zil_Local(l) &
+                    * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
+                    * svdfac(ibs,l)
+                end do
+              end do
+            end do
+          end do
+        end do
+!$OMP END PARALLEL DO
+#endif original_backup_7087781748187412
+
+
+
+#ifdef  optimization_v1_7517109571374991
+!!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+        do ia = 1, natoms(is)
+          do l=0,lmax
+            ias = idxas(ia,is)
+
+            do m=-l,l
+              lm = idxlm_vFeld(l,m)
+              do ibs = 1,n
+                do ist = 1,nstfv
+                  B_out(ist ,ibs, lm, ias) = B_out(ist ,ibs, lm, ias) &
+                    + wfgk_slice(ist) * fourpi * zil_Local(l) &
+                    * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
+                    * svdfac(ibs,l)
+                end do
+              end do
+            end do
+          end do
+        end do
+!!$OMP END PARALLEL DO
+#endif optimization_v1_7517109571374991
+
+      end do
+    end do
+  end subroutine psi_sphr_SVDb_v2
+
+  subroutine psi_sphr_SVDb_v3(ik,wf,B_out)
+    !! Generates the B coefficients for a wavefunction for fixed k-vector.
+    integer, intent(in) :: ik !! non-reduced k-vector index of wf.
+    type(WFType), intent(in) :: wf !! WFType containing plane-wave expansions of psi.
+    complex(dp), intent(out), allocatable :: B_out(:,:,:,:) !! Expansions of radial functions of wf harmonic expansion into gSVD bases.
+    complex(dp), allocatable :: ylmgk(:) !! Spherical harmonic values for fixed G+k vec
+    real(dp), allocatable :: svdfac(:,:) !! Expansion coefficients of sBessel functions of fixed G+K into SVD basis
+    real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
+    real(dp), allocatable :: jx(:) !! single sBessel function
+    real(dp), allocatable :: jx_check(:)
+    complex(dp), allocatable :: wfgk_slice(:)
+    complex(dp), allocatable :: zil_Local(:)
+    complex(dp) :: zcoef, zcoef2
+    complex(dp) :: zi_Local
+    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia
+
+!#define original_backup_7087781748187412
+#define optimization_v1_7517109571374991
+!#define optimization_v2_7805481094809184
+    lmax = size(gSVDb_vec)-1
+    n = gSVDb_vec(1)%n
+
+#ifdef original_backup_7087781748187412
+    allocate(B_out(gSVDb_vec(1)%n,lmmax_vFeld,nstfv,natmtot))
+#endif original_backup_7087781748187412
+
+#ifdef optimization_v1_7517109571374991
+    allocate(B_out(nstfv,gSVDb_vec(1)%n,lmmax_vFeld,natmtot))
+#endif optimization_v1_7517109571374991
+
+    allocate(ylmgk(lmmax_vFeld))
+    allocate(svdfac(gSVDb_vec(1)%n,0:lmax))
+    allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
+    allocate(jx(gSVDb_vec(1)%Nx))
+    allocate(zil_Local(0:lmax))
+    !allocate(jx_check(gSVDb_vec(1)%Nx))
+
+    B_out = cmplx(0._dp,kind=dp)
+    write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
+    zil_Local(0) = cmplx(1._dp,0._dp,kind=dp)
+    zi_Local = cmplx(0._dp,1._dp,kind = dp)
+    do l=1,lmax
+      zil_Local(l) = zil_Local(l-1) * zi_Local
+    end do
+
+    ! Update the B coefficients for the G+k vec
+    allocate(wfgk_slice(nstfv))
+    do igk = 1,Gkqset%ngk(1,ik)
+      wfgk_slice(:) = wf%gk(igk,:)
+      ! Calculate spherical harmonic values for G+k vec
+      call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+
+      do is = 1,nspecies
+        ! Generate sBessel functions for fixed G+K
+        call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*rmt(is), jlx)
+        ! Express sBessel function into SVD basis
+
+        do l=0,lmax
+          jx = jlx(l,:)
+          svdfac(:,l) = sqrt(rmt(is)) * xToB(gSVDb_vec(l),jx(:))
+          !jx_check =  BTox(gSVDb_vec(l),svdfac(:,l))/ sqrt(rmt(is))
+          !write(*,*) "Projection error: ", sum(abs(jx-jx_check)*gSVDb_vec(l)%weights), "l:",l
+        end do
+!
+
+
+
+#ifdef original_backup_7087781748187412
+!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+        do ia = 1, natoms(is)
+          do l=0,lmax
+            ias = idxas(ia,is)
+            do ist = 1,nstfv
+              do m=-l,l
+                lm = idxlm_vFeld(l,m)
+                do ibs = 1,n
+                  B_out(ibs, lm,ist , ias) = B_out(ibs, lm, ist ,ias) &
+                    + wf%gk(igk,ist) * fourpi * zil_Local(l) &
+                    * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm)) &
+                    * svdfac(ibs,l)
+                end do
+              end do
+            end do
+          end do
+        end do
+!$OMP END PARALLEL DO
+#endif original_backup_7087781748187412
+
+
+
+#ifdef  optimization_v1_7517109571374991
+!!$OMP PARALLEL DO COLLAPSE(2) PRIVATE(ia,ias,ist,l,m,lm,ibs)
+        do ia = 1, natoms(is)
+          do l=0,lmax
+            ias = idxas(ia,is)
+
+            do m=-l,l
+              lm = idxlm_vFeld(l,m)
+              zcoef = fourpi * zil_Local(l) * Gkqset%sfacgk(igk,ias,1,ik) * conjg(ylmgk(lm))
+              do ibs = 1,n
+                zcoef2 = zcoef * svdfac(ibs,l)
+                call zaxpy(nstfv,zcoef2,wfgk_slice,1,B_out(1 ,ibs, lm, ias),1)
+                !do ist = 1,nstfv
+                !  B_out(ist ,ibs, lm, ias) = B_out(ist ,ibs, lm, ias) + wfgk_slice(ist) * zcoef2
+                !end do
+              end do
+            end do
+          end do
+        end do
+!!$OMP END PARALLEL DO
+#endif optimization_v1_7517109571374991
+
+      end do
+    end do
+  end subroutine psi_sphr_SVDb_v3
+
+  subroutine psi_sphr_SVDb_v4(ik,wf,B_out)
+    !! Generates the B coefficients for a wavefunction for fixed k-vector.
+    integer, intent(in) :: ik !! non-reduced k-vector index of wf.
+    type(WFType), intent(in) :: wf !! WFType containing plane-wave expansions of psi.
+    complex(dp), intent(out), allocatable :: B_out(:,:,:,:) !! Expansions of radial functions of wf harmonic expansion into gSVD bases.
+    complex(dp), allocatable :: ylmgk(:) !! Spherical harmonic values for fixed G+k vec
+    real(dp), allocatable :: svdfac(:,:,:) !! Expansion coefficients of sBessel functions of fixed G+K into SVD basis
+    real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
+    real(dp), allocatable :: jx(:) !! single sBessel function
+    real(dp), allocatable :: jx_check(:)
+    complex(dp), allocatable :: wfgk_slice(:)
+    complex(dp), allocatable :: zil_Local(:)
+    complex(dp), allocatable :: combined(:,:,:), combined2(:,:,:,:)
+    complex(dp) :: zcoef, zcoef2
+    complex(dp) :: zi_Local
+    complex(dp) :: sqrt_rmt_is,zone,zzero
+    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia, ia_s, ia_e
+
+    lmax = size(gSVDb_vec)-1
+    n = gSVDb_vec(1)%n
+    zone = cmplx(1._dp,0._dp,kind=dp)
+    zzero = cmplx(0._dp,0._dp,kind=dp)
+
+    allocate(B_out(nstfv,gSVDb_vec(1)%n,lmmax_vFeld,natmtot))
+
+    allocate(ylmgk(lmmax_vFeld))
+    allocate(svdfac(gSVDb_vec(1)%n,0:lmax,Gkqset%ngk(1,ik)))
+    allocate(jlx(0:lmax, gSVDb_vec(1)%Nx))
+    allocate(jx(gSVDb_vec(1)%Nx))
+    allocate(zil_Local(0:lmax))
+    allocate(combined(n,lmmax_vFeld,Gkqset%ngk(1,ik)))
+    !allocate(combined_igk(Gkqset%ngk(1,ik)))
+    allocate(combined2(Gkqset%ngk(1,ik),n,lmmax_vFeld,natmtot))
+    !allocate(jx_check(gSVDb_vec(1)%Nx))
+
+    B_out = cmplx(0._dp,kind=dp)
+    write(*,*) "igk vecs in outer loop per ik: ", Gkqset%ngk(1,ik)
+    zil_Local(0) = cmplx(1._dp,0._dp,kind=dp)
+    zi_Local = cmplx(0._dp,1._dp,kind = dp)
+    do l=1,lmax
+      zil_Local(l) = zil_Local(l-1) * zi_Local
+    end do
+
+    do is = 1,nspecies ! Can potentially parallelize across species
+      sqrt_rmt_is = sqrt(rmt(is))
+      ia_s = idxas(1,is) ! Index of first atom of species
+      ia_e = ia_s + natoms(is) - 1 ! Index of last atom of species
+      combined = cmplx(0._dp,0._dp,kind=dp)
+      ! Precompute some quantities.
+      do igk = 1,Gkqset%ngk(1,ik)
+
+        ! Compute the spherical Bessel functions for projection.
+        call sbessel_vec(lmax,gSVDb_vec(1)%xgrid * Gkqset%gkc(igk,1,ik)*rmt(is),jlx(:, :))
+
+        ! Compute the spherical harmonics
+        call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylmgk(:))
+        do l=0,lmax
+
+          ! Compute the projections of spehrical Bessel functions.
+          jx = jlx(l,:)
+          svdfac(:,l, igk) = sqrt_rmt_is * xToB(gSVDb_vec(l),jx(:))
+
+          ! Apply phase factors and scaling to the spherical harmonics.
+          ! Compute outer product of phased spherical harmonics and projection factors of sBessel functions.
+          call zgerc(n, 2*l + 1, fourpi* zil_Local(l), cmplx(svdfac(:,l,igk),0._dp,kind=dp), 1, &
+            ylmgk(l**2 + 1), 1, combined(:, l**2 + 1, igk), n)
+
+          !call check_dger_handwritten(n, l, svdfac(:,l,igk), ylmgk(l**2+1:(l+1)**2), &
+          !  combined(:,l**2+1:(l+1)**2,igk))
+
+        end do
+      end do
+
+      ! Combine spherical harmonics, spherical Bessel function projection factors and structure factors.
+
+      do lm = 1, lmmax_vFeld
+        do ibs = 1, n
+          do ias = ia_s,ia_e
+            call vzmuli(Gkqset%ngk(1,ik),combined(ibs,lm,1),n*lmmax_vFeld,Gkqset%sfacgk(:,ias,1,ik),1,combined2(:,ibs,lm,ias),1)
+          end do
+        end do
+      end do
+
+      ! Calculate B_out
+      call zgemm('T','N',nstfv,n*lmmax_vFeld*natoms(is),Gkqset%ngk(1,ik),zone,wf%gk,nmatmax,combined2(:,:,:,ia_s:ia_e),Gkqset%ngk(1,ik),zzero,B_out(:,:,:,ia_s:ia_e),nstfv)
+
+    end do
+  end subroutine psi_sphr_SVDb_v4
+
+  subroutine check_dger_handwritten(n, l, svd_real, ylm_cplx, comb_dger)
+    use iso_fortran_env, only: dp => real64
+    implicit none
+    integer, intent(in) :: n, l
+    real(dp),    intent(in) :: svd_real(n)                ! svdfac(:,l,igk)
+    complex(dp), intent(in) :: ylm_cplx(2*l+1)            ! block ylmgk(l**2+1:(l+1)**2)
+    complex(dp), intent(in) :: comb_dger(n,2*l+1)         ! result produced by your dger path
+
+    complex(dp), allocatable :: comb_ref(:,:)
+    real(dp) :: maxabs, denom, relmax
+    integer :: i, j
+
+    allocate(comb_ref(n,2*l+1))
+    comb_ref = (0.0_dp, 0.0_dp)
+
+    ! Reference (ground truth): complex outer product with real left vector
+    do j = 1, 2*l+1
+      do i = 1, n
+        comb_ref(i,j) = svd_real(i) * conjg(ylm_cplx(j))
+      end do
+    end do
+
+    maxabs = 0.0_dp
+    relmax = 0.0_dp
+    do j = 1, 2*l+1
+      do i = 1, n
+        maxabs = max(maxabs, abs(comb_dger(i,j) - comb_ref(i,j)))
+        denom  = max(abs(comb_ref(i,j)), 1.0d-300)
+        relmax = max(relmax, abs(comb_dger(i,j) - comb_ref(i,j))/denom)
+      end do
+    end do
+
+    write(*,'(a,i0,a,1pe12.4,a,1pe12.4)') 'dger check l=',l, &
+      '  max|err|=', maxabs, '  max rel err=', relmax
+
+    deallocate(comb_ref)
+  end subroutine check_dger_handwritten
 
   Subroutine gengntyyy_vFeld(max_l1,max_l2,max_l3) !(gntyyy)
 ! !USES:
@@ -783,6 +1149,7 @@ contains
     real(dp) :: g, w, gaunt
 
 
+
     integer :: lmax,n,ias, l,lm,ist1,ist2,ibs1,ibs2,l1,l2,m1,m2,lm1,lm2,m,L_max,ia,is,m1_min,m1_max,lm1_min,lm1_max,lm2_min,lm2_max,nlm
     lmax = size(gSVDb_vec)-1
     L_max = input%groundstate%lmaxvr
@@ -861,7 +1228,7 @@ contains
                   ! base: g = gntyyy_vFeld(lm,lm2,lm1)
                   g = gntyyy_vFeld(lm,lm2,lm1)
 
-                  ! q_nnLM_is(ist1,ist2,lm,ias) = q_nnLM_is(ist1,ist2,lm,ias) + &
+                  ! q_nnLM_is(ist1,ist2,lm,ias) = q_nnLM_is(ist1,ist2,lm,ias) + &!
                   !   gntyyy_vFeld(lm,lm2,lm1)*conjg(B_jk(ist2,ibs2,lm2,ias)) * &
                   !   B_ik(ist1,ibs1,lm1,ias)*gI_Llsls(ibs1,ibs2,l1,l2,l,is)/omega
                   Bre = real(B_ik(:,:,lm1,ias), kind = dp)
@@ -881,7 +1248,7 @@ contains
     end do
 #endif optimization_v1_857257240481943141
 
-#define optimization_v2_45478643439321247
+!#define optimization_v2_45478643439321247
 #ifdef optimization_v2_45478643439321247
     allocate(Bre_vec(nstfv,n, 2*lmax+1),Bim_vec(nstfv,n,2*lmax+1),tempre_vec(nstfv,n,2*lmax+1),tempim_vec(nstfv,n,2*lmax+1),temp_vec(nstfv,n,2*lmax+1), sum_vec(nstfv,nomax,2*lmax+1),g_vec(2*lmax+1))
 
@@ -912,9 +1279,9 @@ contains
 
                 ! do m1 = m1_min,m1_max
                 !   lm1 = idxlm_vFeld(l1,m1)
-                !   lm2 = idxlm_vFeld(l2,m1-m)
+                !   lm2 = idxlm_vFeld(l2,m1-m)!
                 !   g_vec(m1-m1_min+1) = cmplx(gntyyy_vFeld(lm,lm2,lm1), kind=dp)
-                ! end do
+                ! end do!
                 do m1 = m1_min,m1_max
                   lm1 = idxlm_vFeld(l1,m1)
                   lm2 = idxlm_vFeld(l2,m1-m)
@@ -932,6 +1299,63 @@ contains
     end do
 
 #endif optimization_v2_45478643439321247
+
+#define optimization_v3_7980984091840128041
+#ifdef optimization_v3_7980984091840128041
+
+    allocate(Bre_vec(nstfv,n, 2*lmax+1),Bim_vec(nstfv,n,2*lmax+1),tempre_vec(nstfv,n,2*lmax+1),tempim_vec(nstfv,n,2*lmax+1),temp_vec(nstfv,n,2*lmax+1), sum_vec(nstfv,nomax,2*lmax+1),g_vec(-lmax:lmax))
+
+    do is = 1,nspecies
+      do ia = 1,natoms(is)
+        ias = idxas(ia,is)
+        do l = 0, L_max
+
+          do m = -l, l
+            lm = idxlm_vFeld(l, m)
+
+
+            do l1 = 0, lmax
+              do l2 = abs(l-l1),min(lmax,l+l1), 2
+                m1_min = max(-l1,m-l2)
+                m1_max = min(l1,m+l2)
+                lm1_min = idxlm_vFeld(l1,m1_min)
+                lm2_min = idxlm_vFeld(l2,m1_min-m)
+                lm1_max = idxlm_vFeld(l1,m1_max)
+                lm2_max = idxlm_vFeld(l2,m1_max-m)
+                nlm = lm1_max - lm1_min + 1
+
+                call zgemm_batch_strided('N','N',nstfv,n,n,zone,B_ik(:,:,lm1_min:lm1_max,ias),nstfv,nstfv*n,zgI_Llsls(:,:,l1,l2,l,is),n,0,zzero,temp_vec(:,:,1:nlm),nstfv,nstfv*n,nlm)
+                !Bre_vec(:,:,1:nlm)=real(B_ik(:,:,lm1_min:lm1_max,ias), kind = dp)
+                !Bim_vec(:,:,1:nlm) = aimag(B_ik(:,:,lm1_min:lm1_max,ias))
+                !call dgemm_batch_strided('N','N',nstfv,n,n,1._dp,Bre_vec,nstfv,nstfv*n,gI_Llsls(:,:,l1,l2,l,is),n,0,0._dp,tempre_vec,nstfv,nstfv*n,nlm)
+                !call dgemm_batch_strided('N','N',nstfv,n,n,1._dp,Bim_vec,nstfv,nstfv*n,gI_Llsls(:,:,l1,l2,l,is),n,0,0._dp,tempim_vec,nstfv,nstfv*n,nlm)
+                !temp_vec(:,:,1:nlm) = cmplx(tempre_vec(:,:,1:nlm),tempim_vec(:,:,1:nlm),kind=dp)
+                call zgemm_batch_strided('N','C',nstfv,nomax,n,omega_inv,temp_vec(:,:,1:nlm),nstfv,nstfv*n,B_jk(:,:,lm2_min:lm2_max,ias),nstfv,nstfv*n,zzero,sum_vec(:,:,1:nlm),nstfv,nstfv*nomax,nlm)
+
+                ! do m1 = m1_min,m1_max
+                !   lm1 = idxlm_vFeld(l1,m1)
+                !   lm2 = idxlm_vFeld(l2,m1-m)!
+                !   g_vec(m1-m1_min+1) = cmplx(gntyyy_vFeld(lm,lm2,lm1), kind=dp)
+                ! end do!
+
+                do m1 = m1_min,m1_max
+                  lm1 = idxlm_vFeld(l1,m1)
+                  lm2 = idxlm_vFeld(l2,m1-m)
+                  g_vec(m1) = cmplx(gntyyy_vFeld(lm,lm2,lm1),kind=dp)
+                end do
+
+                !q_nnLM_is(:,:,lm,ias) = q_nnLM_is(:,:,lm,ias)+  g*sum_vec(:,:,m1-m1_min+1)!
+                call zgemv('N',nstfv*nomax,nlm,zone,sum_vec(:,:,1:nlm),nstfv*nomax,g_vec(m1_min:m1_max),1,zone,q_nnLM_is(:,:,lm,ias),1)
+
+              end do
+            end do
+
+
+          end do
+        end do
+      end do
+    end do
+#endif optimization_v3_7980984091840128041
   end subroutine calc_multipoles
 
 
@@ -1598,7 +2022,7 @@ contains
 
 
     !---Get the projection coefficients of Bessel functions
-    ! Pagaidām sar��ķinām tikai pirmajam k vektoram
+    ! Pagaidām sar����ķinām tikai pirmajam k vektoram
     ! svdfac(n,ngk)
 
     allocate(svdfac(n,Gkqset%ngk(1,1),0:lmax))
@@ -1611,7 +2035,7 @@ contains
     print *, "Maximum length of G that is used: ", maxval(Gkqset%gkc(:,1,1))
     do l = 0,lmax
       ! Jāsarē��ina sfēriskās Beseļa funkcijas fiksētam l visiem vajadzīgajiem G.
-      ! Savācam vērtības fiksētam l
+      ! Sav��cam vērtības fiksētam l
       jxG_temp = jlxg_temp(l,:,:)
       ! Sarēķin��m izvirzījumu koeficientus.
       call dgemm('T','N',n,Gkqset%ngk(1,1),Nx,1._dp,U_l(:,:,l),Nx,jxG_temp,Nx,0._dp,svdfac(:,:,l),n)
@@ -1715,7 +2139,7 @@ contains
     !-----------------------------------------------------------------------
 
 
-    ! ! Paskatāmies, vai ir jau kaut kas sarē��ināts dot��s viļņa f-as izvirzījumam.
+    ! ! Paskatāmies, vai ir jau kaut kas sarē��ināts dot��s vi��ņa f-as izvirzījumam.
     ! write(*,*) "Is allocated wf%mtrlm:", allocated(wf%mtrlm)
 
     ! ! sarēķinām to pašu vi����u funckijas izvirzījumu ar formulu:

@@ -88,7 +88,7 @@ contains
 
 
   subroutine genSVDBasis(Nx,A,weights,n,xgrid,work, lwork,Basis)
-    !! Generate a basis from the n most significant components of SVD of weighted matrix A.
+    !! Generate a basis from the n most significant components of SVD of weighted matrix A.!!
     integer, intent(in) :: Nx !! Rows of A.
     integer, intent(in) :: n !! How many vectors to keep from SVD
     real(dp), intent(inout) :: A(:,:) !! (Nx, N >=n) A matrix of vectors to be approximated by SVD.

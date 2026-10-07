@@ -176,7 +176,7 @@ Contains
     Use mod_atoms
     Use mod_muffin_tin
 ! !DESCRIPTION:
-! Finds the maximum number of APWs across all muffin-tins.
+! Finds the maximum number of APWs across all muffin-tins.!
 !
 ! !REVISION HISTORY:
 !   Created January 2021 (Andris)

@@ -203,7 +203,7 @@ Subroutine hybrids
     !vrelmt=veffmt
 
 
-    ! Core/Valence radial functions and integrals required for scf_cycle() + task=7
+    ! Core/Valence radial functions and integrals required for scf_cycle() + task=7!
     ! (initialzed from PBE)
 
     call linengy()          ! find the new linearization energies
@@ -293,9 +293,9 @@ Subroutine hybrids
           conv_emp = conv_emp+ dble(vxnl(ik,ik, 1))**2
         end do
         write(*,*)conv_emp-conv_old, "convergence criteria--------------"
-        !if ((conv_emp-conv_old).lt.1e-5) then
-        exit
-        !end if
+        if ((conv_emp-conv_old).lt.1e-5 .and. ihyb .gt. 1) then
+          exit
+        end if
         call flushifc(60)
         conv_old = conv_emp
         conv_emp = 0.d0
@@ -436,9 +436,7 @@ Subroutine hybrids
         call flushifc(60)
         call write_vxnl()
       end if
-      if (ihyb .gt. 1)then
-        exit ! exit ihyb-loop
-      endif
+      exit ! exit ihyb-loop
     else
       ! update the reference
       rhomtref(:,:,:) = rhomt(:,:,:)

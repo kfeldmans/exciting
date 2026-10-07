@@ -503,7 +503,7 @@ contains
         & jlgpr, ylmgp, sfacgp, igfft, &
         zrhoig_sort, qlmir,zlambda,zilmt)
     else
-      ! multipoles_ir4 - some data in single precision
+      ! multipoles_ir4 - some data in single precision!!
       call multipoles_ir3( input%groundstate%lmaxvr, ngp2, gpc, &
         & jlgpr, ylmgp, sfacgp, igfft, &
         zrhoig_sort, qlmir)
@@ -514,15 +514,15 @@ contains
 !write(*,*)"multipoles:",tb-ta
 
 ! take difference of muffin-tin and interstitial multipole moments
-    qlmir_out = qlmir
+    !qlmir_out = qlmir
     !write(*,*) "Difference in multipole calcs: " maxval(abs(qlmir-qlmir_in))
     !if (.not. allocated(qlmir_in)) then
     ! write(*,*) "Error: qlmir_in not allocated"
     !endif
     !write(*,*) "Max Rel Difference: ", maxval(abs(qlmir - qlmir_in)/(max(abs(qlmir),0.00000000000001_dp)))," New: ", maxval(abs(qlmir_in)), "Old: ",maxval(abs(qlmir))
 
-    qlmir = qlmir_in
-    qlm = qlm - qlmir
+    !qlmir = qlmir_in
+    qlm = qlm - qlmir_in
 
 
 
