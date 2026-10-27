@@ -310,7 +310,7 @@ call timesec(tb)
 if (print_times) write(*,*) 'genWFs :',tb-ta
 
     call timesec(ta)
-    call psi_sphr_SVDb_v3(jk,wf2,B_jk)
+    call psi_sphr_SVDb_v4(jk,wf2,B_jk)
     call timesec(tb)
     if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
 
