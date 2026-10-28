@@ -864,22 +864,28 @@ contains
             ,svdfac(ngk_ik, n, 0:lmax))
     allocate(Ks(ngk_ik,n,lmmax_vFeld))
     allocate(Chat(ngk_ik,nst_out,nat_max))
-    allocate(ylm(lmmax_vFeld))
+    
     allocate(Bt(nst_out,nat_max,n,lmmax_vFeld))
 
+    !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(igk,ylm)
+    allocate(ylm(lmmax_vFeld))
+    !$OMP DO
     do igk = 1, ngk_ik
       call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylm)
       ylmc(igk, :) = conjg(ylm)
     end do
-
+    !$OMP END DO
     deallocate(ylm)
+    !$OMP END PARALLEL
+
 
     do is = 1, nspecies
       nat_s = natoms(is)
-
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(igk,lm,ib,l,ia,ist,jlx,jx)
       ! Project j_l(|G+k| R_s x) onto SVD basis.
       allocate(jlx(0:lmax,gSVDb_vec(1)%Nx) &
               ,jx(gSVDb_vec(1)%Nx))
+      !$OMP DO
       do igk = 1,ngk_ik
         call sbessel_vec(lmax,gSVDb_vec(1)%xgrid*Gkqset%gkc(igk,1,ik)*rmt(is),jlx)
         do l=0,lmax
@@ -887,26 +893,32 @@ contains
           svdfac(igk, : ,l) = sqrt(rmt(is)) * xToB(gSVDb_vec(l),jx)
         end do
       end do
+      !$OMP END DO
       deallocate(jlx,jx)
 
       ! K^s(g,b,lm)=4pi * i^l * c_{g,lb) conjg(Y_{g,lm})
+      !$OMP DO COLLAPSE(2)
       do lm=1,lmmax_vFeld
         do ib = 1, n
           Ks(:,ib,lm) = zil(lm_l(lm)) * svdfac(:,ib,lm_l(lm)) * ylmc(:,lm)
         end do
       end do
+      !$OMP END DO NOWAIT
 
       ! Chat(g, nu, a) = C(g, nu) * S(g, alpha_a)
+      !$OMP DO COLLAPSE(2)
       do ia = 1, nat_s
         do ist = 1, nst_out
           Chat(:, ist,ia) = evec(1:ngk_ik,ist) * Gkqset%sfacgk(1:ngk_ik, idxas(ia,is), 1, ik)
         end do
       end do
-
+      !$OMP END DO
+      !$OMP END PARALLEL
       ! Bt((nu,a),(b,lm))=sum_g Chat(g,(nu,a)) * K^s(g,(b,lm))
       call zgemm('T','N',nst_out*nat_s, n * lmmax_vFeld, ngk_ik, zone, Chat, ngk_ik, Ks, ngk_ik &
                 ,zzero, Bt, nst_out * nat_max)
       
+      !$OMP PARALLEL DO COLLAPSE(2) DEFAULT(SHARED) PRIVATE(lm,ib,ia)
       do lm = 1, lmmax_vFeld
         do ib = 1,n 
           do ia = 1, nat_s
@@ -914,7 +926,7 @@ contains
           end do
         end do
       end do
-
+      !$OMP END PARALLEL DO
     end do
     
   end subroutine psi_sphr_SVDb_v5
