@@ -956,13 +956,13 @@ contains
       call timesec(ta)
       call getevecfv(kqset%vkl(:,jk),Gkqset%vgkl(:,:,:,jk),evecfv)
       call psi_sphr_SVDb_v5(jk,evecfv,gB_k(jk)%B)
-      block
-        type(WFType) :: wf
-        complex(dp), allocatable :: B4(:,:,:,:)
-        allocate(wf%gk(nmatmax,nstfv)); wf%gk = evecfv
-        call psi_sphr_SVDb_v4(jk, wf, B4)
-        write(*,*) 'v5 vs v4: max|dB|, max|B| =', maxval(abs(gB_k(jk)%B - B4)), maxval(abs(B4))
-      end block
+      ! block
+      !   type(WFType) :: wf
+      !   complex(dp), allocatable :: B4(:,:,:,:)
+      !   allocate(wf%gk(nmatmax,nstfv)); wf%gk = evecfv
+      !   call psi_sphr_SVDb_v4(jk, wf, B4)
+      !   write(*,*) 'v5 vs v4: max|dB|, max|B| =', maxval(abs(gB_k(jk)%B - B4)), maxval(abs(B4))
+      ! end block
       call timesec(tb)
       write(*,*) "gen expansion for mod_Feld: ", tb-ta
     end do
