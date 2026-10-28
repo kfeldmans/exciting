@@ -15,7 +15,7 @@ module mod_Feldmans
   implicit none
   private
   public :: calc_multipoles,hello, testing, testing_calc, &
-    set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld, psi_sphr_SVDb, psi_sphr_SVDb_v2, psi_sphr_SVDb_v3, psi_sphr_SVDb_v4
+    set_wf_planewaves, testing_calc_2, initialise_mod_Feld,finalise_mod_Feld, psi_sphr_SVDb, psi_sphr_SVDb_v2, psi_sphr_SVDb_v3, psi_sphr_SVDb_v4, psi_sphr_SVDb_v5, Bk_type ,gB_k, build_B_cache
 
   ! Ripped from Fortran stdlib
   real(dp), parameter :: tolerance = 4._dp*epsilon(1._dp)
@@ -32,6 +32,10 @@ module mod_Feldmans
   integer, allocatable :: idxlm_vFeld(:,:)
   integer :: lmax_vFeld
   integer :: lmmax_vFeld
+  type :: Bk_type
+   complex(dp), allocatable :: B(:,:,:,:)
+  end type Bk_type
+  type(Bk_type), allocatable :: gB_k(:) !! Coefficients for every k-point, constructed by build_B_cache
 
 contains
 
@@ -382,7 +386,7 @@ contains
     end if
 
     if (allocated(gsvdc)) deallocate(gsvdc)
-
+    if (allocated(gB_k)) deallocate(gB_k)
     write(*,*) "Finalisation for mod_Feld complete"
   end subroutine finalise_mod_Feld
 
@@ -818,6 +822,141 @@ contains
 
     end do
   end subroutine psi_sphr_SVDb_v4
+
+  subroutine psi_sphr_SVDb_v5(ik,evec,B_ik)
+    !! Generates the B coefficients for a wavefunction for fixed k-vector.
+    integer, intent(in) :: ik !! non-reduced k-vector index of wf.
+    complex(dp), intent(in) :: evec(:,:) !! wf%gk = evec; only rows 1..ngk are used
+    !type(WFType), intent(in) :: wf !! WFType containing plane-wave expansions of psi.
+    complex(dp), intent(out) :: B_ik(:,:,:,:) !! (nst, n,lmmax_vFeld, natmtot) Expansions of radial functions of wf harmonic expansion into gSVD bases.
+    complex(dp), allocatable :: ylm(:) !! Spherical harmonic values for single G+k vec
+    complex(dp), allocatable :: ylmc(:,:) !! (ngk, lmmax_vFeld) conugated Ylm for all G+k
+    real(dp), allocatable :: svdfac(:,:,:) !! (ngk,n, 0:lmax) projection of sBessels onto SVD basis.
+    real(dp), allocatable :: jlx(:,:) !! sBessel function values for fixed G+K
+    real(dp), allocatable :: jx(:) !! single sBessel function
+    complex(dp), allocatable :: Ks(:,:,:)
+    complex(dp), allocatable :: Chat(:,:,:)
+    complex(dp), allocatable :: zil(:) !! 4pi * i**l
+    complex(dp), allocatable :: Bt(:,:,:,:) !! (nst_out, nat_max, n, lmmax_vFeld)
+    integer, allocatable :: lm_l(:) !! l of each lm
+    complex(dp), parameter :: zone = cmplx(1._dp,0._dp,kind=dp), zzero = cmplx(0._dp,0._dp,kind=dp)
+    integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia, ia_s, ia_e, nst_out,ngk_ik, nat_max, nat_s, ib
+
+    lmax = size(gSVDb_vec)-1
+    n = gSVDb_vec(1)%n
+    nst_out = size(B_ik, 1)
+    ngk_ik =  Gkqset%ngk(1,ik)
+    if (size(B_ik,2) /= n .or. size(B_ik,3) /= lmmax_vFeld .or. size(B_ik,4) /= natmtot &
+        .or. size(evec,1) < ngk_ik .or. size(evec,2) < nst_out) &
+      error stop 'psi_sphr_SVDb_v5: B_ik or evec has wrong shape'
+    
+
+    allocate(zil(0:lmax), lm_l(lmmax_vFeld))
+    zil(0) = fourpi
+    lm_l(1) = 0
+    do l = 1, lmax
+      zil(l) = zil(l-1) * cmplx(0._dp,1._dp,kind=dp)
+      lm_l(l**2+1:(l+1)**2) = l
+    end do
+
+    nat_max = maxval(natoms(1:nspecies))
+    allocate(ylmc(ngk_ik,lmmax_vFeld) &
+            ,svdfac(ngk_ik, n, 0:lmax))
+    allocate(Ks(ngk_ik,n,lmmax_vFeld))
+    allocate(Chat(ngk_ik,nst_out,nat_max))
+    allocate(ylm(lmmax_vFeld))
+    allocate(Bt(nst_out,nat_max,n,lmmax_vFeld))
+
+    do igk = 1, ngk_ik
+      call genylm(lmax, Gkqset%tpgkc(:,igk,1,ik), ylm)
+      ylmc(igk, :) = conjg(ylm)
+    end do
+
+    deallocate(ylm)
+
+    do is = 1, nspecies
+      nat_s = natoms(is)
+
+      ! Project j_l(|G+k| R_s x) onto SVD basis.
+      allocate(jlx(0:lmax,gSVDb_vec(1)%Nx) &
+              ,jx(gSVDb_vec(1)%Nx))
+      do igk = 1,ngk_ik
+        call sbessel_vec(lmax,gSVDb_vec(1)%xgrid*Gkqset%gkc(igk,1,ik)*rmt(is),jlx)
+        do l=0,lmax
+          jx = jlx(l,:)
+          svdfac(igk, : ,l) = sqrt(rmt(is)) * xToB(gSVDb_vec(l),jx)
+        end do
+      end do
+      deallocate(jlx,jx)
+
+      ! K^s(g,b,lm)=4pi * i^l * c_{g,lb) conjg(Y_{g,lm})
+      do lm=1,lmmax_vFeld
+        do ib = 1, n
+          Ks(:,ib,lm) = zil(lm_l(lm)) * svdfac(:,ib,lm_l(lm)) * ylmc(:,lm)
+        end do
+      end do
+
+      ! Chat(g, nu, a) = C(g, nu) * S(g, alpha_a)
+      do ia = 1, nat_s
+        do ist = 1, nst_out
+          Chat(:, ist,ia) = evec(1:ngk_ik,ist) * Gkqset%sfacgk(1:ngk_ik, idxas(ia,is), 1, ik)
+        end do
+      end do
+
+      ! Bt((nu,a),(b,lm))=sum_g Chat(g,(nu,a)) * K^s(g,(b,lm))
+      call zgemm('T','N',nst_out*nat_s, n * lmmax_vFeld, ngk_ik, zone, Chat, ngk_ik, Ks, ngk_ik &
+                ,zzero, Bt, nst_out * nat_max)
+      
+      do lm = 1, lmmax_vFeld
+        do ib = 1,n 
+          do ia = 1, nat_s
+            B_ik(:,ib,lm,idxas(ia,is))=Bt(:,ia,ib,lm)
+          end do
+        end do
+      end do
+
+    end do
+    
+  end subroutine psi_sphr_SVDb_v5
+
+  subroutine ensure_shape4(a,n1,n2,n3,n4)
+    integer, intent(in) :: n1,n2,n3,n4
+    complex(dp), allocatable :: a(:,:,:,:)
+
+    if (allocated(a)) then
+      if (all(shape(a)==[n1,n2,n3,n4])) return
+      deallocate(a)
+    end if
+    allocate(a(n1,n2,n3,n4))
+  end subroutine ensure_shape4
+  
+  subroutine build_B_cache()
+  !! Generates a cache of B_ik coefficients by method of psi_sphr_SVDb
+    complex(dp), allocatable :: evecfv(:,:)
+    integer :: jk
+    real(dp) :: ta, tb, t0
+
+    if (.not. allocated(gB_k)) allocate(gB_k(kqset%nkpt))
+    allocate(evecfv(nmatmax, nstfv))
+    call timesec(t0)
+    do jk = 1, kqset%nkpt
+      call ensure_shape4(gB_k(jk)%B, nstfv, gSVDb_vec(1)%n, lmmax_vFeld, natmtot)
+      call timesec(ta)
+      call getevecfv(kqset%vkl(:,jk),Gkqset%vgkl(:,:,:,jk),evecfv)
+      call psi_sphr_SVDb_v5(jk,evecfv,gB_k(jk)%B)
+      block
+        type(WFType) :: wf
+        complex(dp), allocatable :: B4(:,:,:,:)
+        allocate(wf%gk(nmatmax,nstfv)); wf%gk = evecfv
+        call psi_sphr_SVDb_v4(jk, wf, B4)
+        write(*,*) 'v5 vs v4: max|dB|, max|B| =', maxval(abs(gB_k(jk)%B - B4)), maxval(abs(B4))
+      end block
+      call timesec(tb)
+      write(*,*) "gen expansion for mod_Feld: ", tb-ta
+    end do
+    write(*,*) 'Built B cache for ', kqset%nkpt, ' k-points in: ', tb-t0
+    deallocate(evecfv)
+  end subroutine build_B_cache
 
   subroutine check_dger_handwritten(n, l, svd_real, ylm_cplx, comb_dger)
     use iso_fortran_env, only: dp => real64

@@ -10,6 +10,7 @@ subroutine calc_vxnl()
     use modfvsystem
     use modmpi
     use modinteg 
+    use mod_Feldmans, only: build_B_cache
 ! !DESCRIPTION:
 !   Calculates the non-local exchange potential
 !   and the non-local exchange energy for Hartree-Fock based hybrid functionals.
@@ -298,6 +299,9 @@ else ! Use oepvnl
       deallocate(evalfv)
 
 
+      ! Start to generate B_ik's for FockExchange
+        call build_B_cache()
+        ! Finish to generate B_ik's for FockExchange
 #ifdef MPI
       Do ik = firstk (rank, nkpt), lastk (rank, nkpt)
 #else
@@ -311,6 +315,7 @@ else ! Use oepvnl
           lofr=lofr_old
           !!!!!!!!!!!!!!!!!!!!!!!
         endif
+        
         call timesec(ta)
         call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,vxpsimt)
         call timesec(tb)

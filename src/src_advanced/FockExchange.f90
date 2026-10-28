@@ -21,7 +21,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
   use mod_Feldmans, only: calc_multipoles, hello, testing, &
     testing_calc, set_wf_planewaves, &
-    testing_calc_2, psi_sphr_SVDb, psi_sphr_SVDb_v2, psi_sphr_SVDb_v3,psi_sphr_SVDb_v4
+    testing_calc_2, psi_sphr_SVDb, psi_sphr_SVDb_v2, psi_sphr_SVDb_v3,psi_sphr_SVDb_v4, gB_k
 
       Implicit None
 ! arguments
@@ -77,6 +77,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   complex(dp), allocatable :: qlmir_new(:,:)
   complex(dp), allocatable :: B_ik(:,:,:,:)
   complex(dp), allocatable :: B_jk(:,:,:,:)
+  complex(dp), allocatable :: B_ik_vec(:,:,:,:,:) ! Cache of computed coefficients B_ik
   complex(dp), allocatable :: q_nnLM_is_oldnew(:,:,:,:)
       
       complex(8), Allocatable :: rpseudomat(:,:,:,:) ! (ifit,lm,igr,ias)
@@ -131,17 +132,21 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
       call WFInit(wf1)
 
+      ! Use wf1 as dummy variable to call generation of wf%gk for every k-point for computing B_ik cache B_ik_vec
+
+      ! End of B_ik_vec generation
+
       ik  = kset%ikp2ik(ikp) ! 1d reduced index -> 1d non-reduced k-point index
       call genWF(ik,wf1)
       call genWFinMT(wf1)
       call genWFonMesh(wf1)
 
-  call timesec(ta)
-  !call psi_sphr_SVDb_v3(ik,wf1,B_ik)
-  call psi_sphr_SVDb_v4(ik,wf1,B_ik)
-  !write(*,*) "Max compute diff: ", maxval(abs(B_ik - B_jk))
-  call timesec(tb)
-  if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
+!   call timesec(ta)
+!   !call psi_sphr_SVDb_v3(ik,wf1,B_ik)
+!   call psi_sphr_SVDb_v4(ik,wf1,B_ik)
+!   !write(*,*) "Max compute diff: ", maxval(abs(B_ik - B_jk))
+!   call timesec(tb)
+!   if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
   !stop
   !call hello()
   !call testing(wf1)
@@ -309,10 +314,10 @@ call timesec(ta)
 call timesec(tb)
 if (print_times) write(*,*) 'genWFs :',tb-ta
 
-    call timesec(ta)
-    call psi_sphr_SVDb_v4(jk,wf2,B_jk)
-    call timesec(tb)
-    if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
+   !  call timesec(ta)
+   !  call psi_sphr_SVDb_v4(jk,wf2,B_jk)
+   !  call timesec(tb)
+   !  if (print_times) write(*,*) 'gen expansion for mod_Feld :', tb-ta
 
          solver = (input%groundstate%hybrid%singularity.ne."exc")
          
@@ -352,7 +357,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
     q_nnLM_is = 0._dp
     write(*,*)"q_nnLM_is is allocated:", allocated(q_nnLM_is)
     call timesec(tf1)
-    call calc_multipoles(B_ik,B_jk, q_nnLM_is)
+    call calc_multipoles(gB_k(ik)%B,gB_k(jk)%B, q_nnLM_is)
     call timesec(tf2)
     write(*,*) "Multipoles calculated in: ", tf2-tf1
 
