@@ -1466,7 +1466,7 @@ do is = 1,nspecies
   end do
 end do
 
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(l,ias,l1,l2,lm2_min,lm2_max,m,lm,m1,lm1,lm2,g, Ujk,Wjk)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(l,ias,l1,l2,lm2_min,lm2_max,m,lm,m1,lm1,lm2,g, Ujk,Wjk,is)
 allocate(Ujk(n,nomax,-lmax:lmax) &
         ,Wjk(n,lmmax_vFeld,nomax, 2*L_max + 1))
 !$OMP DO COLLAPSE(2) SCHEDULE(dynamic,1)
