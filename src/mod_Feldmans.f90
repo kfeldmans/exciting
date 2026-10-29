@@ -1288,13 +1288,19 @@ contains
 
   subroutine calc_multipoles(B_ik,B_jk,q_nnLM_is)
     !! Calculate multipoles given the B coefficient matrices
-    complex(dp), intent(in) :: B_ik(:,:,:,:)
-    complex(dp), intent(in) :: B_jk(:,:,:,:)
-    complex(dp), intent(out) :: q_nnLM_is(:,:,:,:)
+    complex(dp), contiguous, intent(in) :: B_ik(:,:,:,:)
+    complex(dp), contiguous, intent(in) :: B_jk(:,:,:,:)
+    complex(dp), contiguous, intent(out) :: q_nnLM_is(:,:,:,:)
     complex(dp), allocatable :: temp(:,:)
     real(dp), allocatable :: Bre(:,:), Bim(:,:), tempre(:,:), tempim(:,:)
     real(dp), allocatable :: Bre_vec(:,:,:), Bim_vec(:,:,:), tempre_vec(:,:,:), tempim_vec(:,:,:)
     complex(dp), allocatable :: temp_vec(:,:,:),sum_vec(:,:,:),g_vec(:)
+
+    !For v4
+    complex(dp), allocatable :: Ujk(:,:,:) !! (n, nomax, -lmax:lmax)
+    complex(dp), allocatable :: Wjk(:,:,:,:) !! (n, lmmax_vFeld, nomax, 2*L_max+1)
+    complex(dp), allocatable :: q_tmp(:,:,:,:) ! Temporary verification of v4
+    integer, allocatable :: ias2is(:) !! species of atoms
     complex(dp) :: acc,bj,zone,zzero,omega_inv
     real(dp) :: g, w, gaunt
 
@@ -1450,6 +1456,52 @@ contains
 
 #endif optimization_v2_45478643439321247
 
+
+#define optimization_v4_7581378417848120954
+#ifdef optimization_v4_7581378417848120954
+allocate(ias2is(natmtot))
+do is = 1,nspecies
+  do ia = 1, natoms(is)
+    ias2is(idxas(ia,is))=is
+  end do
+end do
+
+allocate(Ujk(n,nomax,-lmax:lmax) &
+        ,Wjk(n,lmmax_vFeld,nomax, 2*L_max + 1))
+
+
+do l= L_max, 0, -1
+  do ias = 1,natmtot
+    is = ias2is(ias)
+    Wjk(:,:,:,1:2*l + 1)=zzero
+    do l1 = 0,lmax
+      do l2 = abs(l-l1), min(lmax, l+l1), 2
+        lm2_min = idxlm_vFeld(l2,-l2)
+        lm2_max = idxlm_vFeld(l2,l2)
+        call zgemm_batch_strided('N','C',n,nomax,n,zone,zgI_Llsls(:,:,l1,l2,l,is),n,0 &
+                                ,B_jk(:,:,lm2_min:lm2_max,ias),nstfv,nstfv*n,zzero,Ujk(:,:,-l2:l2) &
+                                ,n,n*nomax,2*l2+1)
+        do m = -l,l
+          lm = idxlm_vFeld(l,m)
+          do m1 = max(-l1, m-l2),min(l1,m+l2)
+            lm1 = idxlm_vFeld(l1,m1)
+            lm2 = idxlm_vFeld(l2,m1-m)
+            g = gntyyy_vFeld(lm,lm2,lm1)
+            Wjk(:,lm1,:,m+l+1) = Wjk(:,lm1,:,m+l+1) + g * Ujk(:,:,m1-m)
+          end do
+        end do
+      end do !l2
+    end do !l1
+    call zgemm('N','N',nstfv,nomax*(2*l+1),n*lmmax_vFeld,omega_inv,B_ik(:,:,:,ias),nstfv &
+              ,Wjk,n*lmmax_vFeld,zzero,q_nnLM_is(:,:,l**2 + 1 : (l+1)**2,ias), nstfv)
+  end do !ias
+end do !l
+
+deallocate(Ujk,Wjk)
+allocate(q_tmp, source = q_nnLM_is)
+q_nnLM_is = zzero
+#endif optimization_v4_7581378417848120954
+
 #define optimization_v3_7980984091840128041
 #ifdef optimization_v3_7980984091840128041
 
@@ -1505,7 +1557,10 @@ contains
         end do
       end do
     end do
+
 #endif optimization_v3_7980984091840128041
+write(*,*) "Calc multipoles v4 vs v3 diff: max|q|, max|dq| :",maxval(abs(q_nnLM_is)), maxval(abs(q_nnLM_is-q_tmp)) 
+
   end subroutine calc_multipoles
 
 
