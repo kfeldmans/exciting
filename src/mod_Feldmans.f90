@@ -1466,10 +1466,10 @@ do is = 1,nspecies
   end do
 end do
 
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(l,ias,l1,l2,lm2_min,lm2_max,m,lm,m1,lm1,lm2,g, Ujk,Wjk)
 allocate(Ujk(n,nomax,-lmax:lmax) &
         ,Wjk(n,lmmax_vFeld,nomax, 2*L_max + 1))
-
-
+!$OMP DO COLLAPSE(2) SCHEDULE(dynamic,1)
 do l= L_max, 0, -1
   do ias = 1,natmtot
     is = ias2is(ias)
@@ -1496,8 +1496,10 @@ do l= L_max, 0, -1
               ,Wjk,n*lmmax_vFeld,zzero,q_nnLM_is(:,:,l**2 + 1 : (l+1)**2,ias), nstfv)
   end do !ias
 end do !l
-
+!$OMP END DO
 deallocate(Ujk,Wjk)
+!$OMP END PARALLEL
+
 allocate(q_tmp, source = q_nnLM_is)
 q_nnLM_is = zzero
 #endif optimization_v4_7581378417848120954
