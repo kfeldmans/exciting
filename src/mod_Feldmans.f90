@@ -1500,11 +1500,11 @@ end do !l
 deallocate(Ujk,Wjk)
 !$OMP END PARALLEL
 
-allocate(q_tmp, source = q_nnLM_is)
-q_nnLM_is = zzero
+!allocate(q_tmp, source = q_nnLM_is)
+!q_nnLM_is = zzero
 #endif optimization_v4_7581378417848120954
 
-#define optimization_v3_7980984091840128041
+!#define optimization_v3_7980984091840128041
 #ifdef optimization_v3_7980984091840128041
 
     allocate(Bre_vec(nstfv,n, 2*lmax+1),Bim_vec(nstfv,n,2*lmax+1),tempre_vec(nstfv,n,2*lmax+1),tempim_vec(nstfv,n,2*lmax+1),temp_vec(nstfv,n,2*lmax+1), sum_vec(nstfv,nomax,2*lmax+1),g_vec(-lmax:lmax))
@@ -1561,7 +1561,7 @@ q_nnLM_is = zzero
     end do
 
 #endif optimization_v3_7980984091840128041
-write(*,*) "Calc multipoles v4 vs v3 diff: max|q|, max|dq| :",maxval(abs(q_nnLM_is)), maxval(abs(q_nnLM_is-q_tmp)) 
+!write(*,*) "Calc multipoles v4 vs v3 diff: max|q|, max|dq| :",maxval(abs(q_nnLM_is)), maxval(abs(q_nnLM_is-q_tmp)) 
 
   end subroutine calc_multipoles
 
