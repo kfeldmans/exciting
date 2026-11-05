@@ -295,7 +295,7 @@ Contains
    real(8) :: norm, dotp
    real(8) :: ta,tb
  
-   real(8), parameter :: usefulness_thr=1d-12
+   real(8), parameter :: usefulness_thr=1d-8
    integer :: maxuseful,nuseful
 
    real(8), allocatable :: eval(:)
@@ -386,7 +386,7 @@ Contains
          do ipbf=npbf(l,ias),1,-1
 !           useful(npbf(l,ias)-ipbf+1)
 !          write(*,*) ipbf,eval(ipbf)
-           !if ((l.gt.4).and.(eval(ipbf).lt.1d-4)) exit
+           if ((l.gt.4).and.(eval(ipbf).lt.1d-4)) exit
            if (eval(ipbf).lt.usefulness_thr) exit
          enddo
 !         write(*,*) "l,Nuseful",l,npbf(l,ias)-ipbf
@@ -727,7 +727,7 @@ endif
    real(8) :: norm, dotp
    real(8) :: ta,tb
  
-   real(8), parameter :: usefulness_thr=1d-12
+   real(8), parameter :: usefulness_thr=1d-6
    integer :: maxuseful,nuseful
 
    real(8), allocatable :: eval(:)
