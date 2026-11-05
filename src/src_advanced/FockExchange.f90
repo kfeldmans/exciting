@@ -11,10 +11,11 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Use modmain 
       Use modinput
       Use modgw, only : kqset,Gkqset, kset, nomax, numin, ikvbm, ikcbm, ikvcm, Gset
-  Use potentials, only: coulomb_potential2, coulomb_potential2vFeld
+      Use potentials, only: coulomb_potential2, coulomb_potential3
       use weinert, only: poisson_mt_yukawa,pseudocharge_rspace_matrix
       use mod_hybrids, only : gmax_pw_method
       USE OMP_LIB
+      use mod_radial
   use precision, only:dp
 
       use poterf
@@ -67,9 +68,10 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Complex (8), Allocatable :: wf1ir (:)
       Complex (8), Allocatable :: wf2ir (:)
       Complex (8), Allocatable :: potir0 (:)
-      Complex (8), Allocatable :: zvclmt (:, :, :, :)
       Complex (8), Allocatable :: zvcltp (:, :)
-      Complex (8), Allocatable :: zfmt (:, :),zfmt0 (:, :), zrhomt(:,:), potmt0(:,:,:)
+      Complex (8), Allocatable :: zfmt (:, :),zfmt0 (:, :), zfmt1(:,:), zrhomt(:,:), potmt0(:,:,:)
+
+     
   complex(8), allocatable :: q_nnLM_is(:,:,:,:) !! q_nn_LM_is(n,n',LM, ias) in q_nnLM_is(nstfv,nstfv,lmmaxvr, natmtot)
       real(8), allocatable :: jlgqsmallr(:,:,:,:),jlgrtmp(:), rfmt(:)
   complex(dp), allocatable :: qlmir(:,:)
@@ -81,6 +83,9 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
   complex(dp), allocatable :: q_nnLM_is_oldnew(:,:,:,:)
       
       complex(8), Allocatable :: rpseudomat(:,:,:,:) ! (ifit,lm,igr,ias)
+      complex(8), Allocatable :: qmtlm(:,:,:)   !lmmaxvr,natmtot,nomax
+      complex(8), Allocatable :: vxpb(:,:,:) !lmmaxvr,maxpbf2,natmtot
+      complex(8), Allocatable :: vxpbtot(:,:,:,:) !lmmaxvr,maxpbf2,natmtot,nstsv
 
       type (WFType) :: wf1,wf2,prod,pot
   integer :: ik_test,ist3_test,jk_test,ist2_test
@@ -103,17 +108,17 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Allocate (jlgq0r(0:input%groundstate%lmaxvr, nrcmtmax, nspecies))
       Allocate (ylmgq(lmmaxvr, ngvec))
       Allocate (sfacgq(ngvec, natmtot))
-!      Allocate (vxpsiirtmp(ngrtot))   !dealoc
-!      Allocate (vxpsigktmp(ngkmax))   !dealoc
       Allocate (wfcr1(ntpll, nrcmtmax))
-     ! Allocate (zrhoir(ngrtot))
       Allocate (zvcltp(ntpll, nrcmtmax))
       Allocate (zfmt(lmmaxvr, nrcmtmax),zfmt0(lmmaxvr, nrcmtmax))
-      Allocate (zvclmt(lmmaxvr, nrcmtmax, natmtot, nstsv)) !dealoc
+      !Allocate (zvclmt(lmmaxvr, nrcmtmax, natmtot, nstsv)) !dealoc
+      Allocate (qmtlm(lmmaxvr,natmtot,nomax))
+      Allocate (vxpbtot(maxpbf2,lmmaxvr,natmtot,nstsv))
       !Allocate (zwfir(ngkmax))
 
 
-  !!write(*,*) "erfcapprox=",input%groundstate%hybrid%erfcapprox
+
+      !write(*,*) "erfcapprox=",input%groundstate%hybrid%erfcapprox
       !write(*,*) "rpseudo=",input%groundstate%hybrid%rpseudo
       rpseudo=input%groundstate%hybrid%rpseudo
       lmaxvr=input%groundstate%lmaxvr
@@ -138,6 +143,8 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
 
       ik  = kset%ikp2ik(ikp) ! 1d reduced index -> 1d non-reduced k-point index
       call genWF(ik,wf1)
+      
+      call orderWF(wf1)
       call genWFinMT(wf1)
       call genWFonMesh(wf1)
 
@@ -188,9 +195,9 @@ call timesec(ta)
          if (rpseudo)then
             if (.not.allocated(rpseudomat)) then
                if((input%groundstate%hybrid%erfcapprox.eq."truncatedYukawa").or.(input%groundstate%hybrid%erfcapprox.eq."Yukawa")) then
-                  allocate(rpseudomat(nfit*2-1,(lmaxvr+1)**2,rgrid_max_nmtpoints,natmtot))
+                  allocate(rpseudomat((lmaxvr+1)**2,rgrid_max_nmtpoints,natmtot,nfit*2-1))
                else
-                  allocate(rpseudomat(1,(lmaxvr+1)**2,rgrid_max_nmtpoints,natmtot))
+                  allocate(rpseudomat((lmaxvr+1)**2,rgrid_max_nmtpoints,natmtot,1))
                endif
             endif
             if((input%groundstate%hybrid%erfcapprox.eq."truncatedYukawa").or.(input%groundstate%hybrid%erfcapprox.eq."Yukawa")) then
@@ -219,11 +226,11 @@ call timesec(ta)
                do ifit2=1,nfit*2-1
                   if (ifit2.le.nfit) then
                      ifit=ifit2
-                     call pseudocharge_rspace_matrix (lmaxvr,input%groundstate%npsden,v,rpseudomat(ifit2,:,:,:),&
+                     call pseudocharge_rspace_matrix (lmaxvr,input%groundstate%npsden,v,rpseudomat(:,:,:,ifit2),&
                               & yukawa_in=.true.,zlambda=erfc_fit(ifit,2),zilmt=zilmt(ifit,:,:),zbessi=zbessi(:,ifit,:,:))
                   else
                      ifit=ifit2-nfit+1
-                     call pseudocharge_rspace_matrix (lmaxvr,input%groundstate%npsden,v,rpseudomat(ifit2,:,:,:),&
+                     call pseudocharge_rspace_matrix (lmaxvr,input%groundstate%npsden,v,rpseudomat(:,:,:,ifit2),&
                               & yukawa_in=.true.,zlambda=conjg(erfc_fit(ifit,2)),zilmt=conjg(zilmt(ifit,:,:)),zbessi=conjg(zbessi(:,ifit,:,:)))
                   endif
                enddo
@@ -231,7 +238,7 @@ call timesec(ta)
 !$OMP END PARALLEL
 
             else 
-               call pseudocharge_rspace_matrix(lmaxvr,input%groundstate%npsden,v,rpseudomat(1,:,:,:))
+               call pseudocharge_rspace_matrix(lmaxvr,input%groundstate%npsden,v,rpseudomat(:,:,:,1))
             endif !Yukawa
          endif ! rpseudo
 
@@ -301,16 +308,11 @@ if (print_times) write(*,*) 'qpt_init :', tb-ta
 call timesec(ta)
 
          call genWF(jk,wf2)
+         call orderWF(wf2)
          call genWFinMT(wf2)
          call genWFonMesh(wf2)
+         deallocate(wf2%mtrlm)
 
-
-    !--------------------
-    ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
-    !call set_wf_planewaves(wf2)
-    !write(*,*) "The volume of unit element: ", omega
-    ! ZEROED PARAMETERS HERE FELDMANS EDIT EDIT
-    !----------------
 call timesec(tb)
 if (print_times) write(*,*) 'genWFs :',tb-ta
 
@@ -321,7 +323,8 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
 
          solver = (input%groundstate%hybrid%singularity.ne."exc")
          
-         zvclmt (:, :, :, :) = 0.d0
+         !zvclmt (:, :, :, :) = 0.d0
+
 
          if ((input%groundstate%hybrid%erfcapprox.eq."truncatedYukawa").or.&
          & ((input%groundstate%hybrid%erfcapprox.eq."none").and.(input%groundstate%hybrid%singularity.eq."exc0d")))then 
@@ -342,6 +345,8 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          endif
 
          !write(*,*)"cutoff", cutoff,"ik, jk",ik,jk,"handleG0",handleG0
+
+         vxpbtot=0d0
 
          time_coul=0d0
          time_fft=0d0
@@ -364,7 +369,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
     call timesec(tb) ! Reset time counter for omp_loop
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
       !ist2 
 
          !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -390,45 +395,71 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          Allocate (potir0(ngrtot))
          Allocate (vxpsiirtmp(ngrtot))
          Allocate (vxpsigktmp(ngkmax))
-    Allocate(qlmir_new(lmmaxvr, natmtot))
-    allocate(qlmir(lmmaxvr,natmtot))
-    Do ist2 = 1, nomax!1,1!!
+         Allocate (vxpb(maxpbf2,lmmaxvr,natmtot))
+         Allocate(qlmir_new(lmmaxvr, natmtot))
+         allocate(qlmir(lmmaxvr,natmtot))
 
-            call timesec(tc)
-            wf2ir(:) = 0.d0
-            Do igk = 1, Gkqset%ngk (1, jk)
-               ifg = igfft (Gkqset%igkig(igk, 1, jk))
-               wf2ir(ifg) = t1*wf2%gk(igk, ist2)
+         Do ist3 = 1, nstfv
+           call timesec(tc)
+
+           vxpb=0d0
+
+           do is=1,nspecies
+             do ia=1,natoms(is)
+               ias=idxas(ia,is)
+!$OMP DO SCHEDULE(DYNAMIC)
+               do ist2 = 1, nomax
+                 call WFprodcoul3(ia,is,ist3,wf1,ist2,wf2,vxpb(:,:,ias),qmtlm(:,ias,ist2))
+               enddo
+!$OMP END DO NOWAIT
+             enddo
+           end Do
+
+
+
+
+!$OMP CRITICAL
+               vxpbtot(:,:,:,ist3)=vxpbtot(:,:,:,ist3)+vxpb(:,:,:)
+!$OMP END CRITICAL
+!$OMP BARRIER
+
+           call timesec(td)
+           time_rs=time_rs+td-tc
+
+            call timesec(tc)          
+            wf1ir(:) = 0.d0 
+            Do igk = 1, Gkqset%ngk (1, ik)
+               ifg = igfft (Gkqset%igkig(igk, 1, ik))
+               wf1ir(ifg) = t1*wf1%gk(igk, ist3)
             End Do
-            Call zfftifc (3, ngrid, 1, wf2ir(:))
-
+            Call zfftifc (3, ngrid, 1, wf1ir(:))
             call timesec(td)
             time_fft=time_fft+td-tc
 !$OMP DO SCHEDULE(DYNAMIC)
-      Do ist3 = 1, nstfv!1,1!!
-        call timesec(tc)
-        qlmir_new(:,:) = q_nnLM_is(ist3,ist2,:,:)
-        call timesec(td)
-        time_qlm = td-tc + time_qlm
+
+            Do ist2 = 1, nomax
+
+               call timesec(tc)
+               wf2ir(:) = 0.d0
+               Do igk = 1, Gkqset%ngk (1, jk)
+                 ifg = igfft (Gkqset%igkig(igk, 1, jk))
+                 wf2ir(ifg) = t1*wf2%gk(igk, ist2)
+               End Do
+               Call zfftifc (3, ngrid, 1, wf2ir(:))
+
+            call timesec(td)
+            time_fft=time_fft+td-tc
+
+            call timesec(tc)
+            qlmir_new(:,:) = q_nnLM_is(ist3,ist2,:,:)
+            call timesec(td)
+            time_qlm = td-tc + time_qlm
+
 
                vxpsiirtmp(:) = 0.d0
-               call timesec(tc)          
-               wf1ir(:) = 0.d0 
-               Do igk = 1, Gkqset%ngk (1, ik)
-                  ifg = igfft (Gkqset%igkig(igk, 1, ik))
-                  wf1ir(ifg) = t1*wf1%gk(igk, ist3)
-               End Do
-               Call zfftifc (3, ngrid, 1, wf1ir(:))
-               call timesec(td)
-               time_fft=time_fft+td-tc
 
    ! calculate the complex overlap density
    !-----------------------------------------------------------------------------------
-               call timesec(tc)
-               call WFprodrs(ist2,wf2,ist3,wf1,prod)
-
-               call timesec(td)
-               time_rs=time_rs+td-tc
                call timesec(tc)
                prodir(:)=conjg(wf2ir(:))*wf1ir(:)
                call timesec(td)
@@ -456,7 +487,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                      & prodir(:), potmt0, potir0, zrho02,v, &
                      & cutoff=cutoff,hybrid_in=.true.,yukawa_in=.true., &
                      & zlambda_in=erfc_fit(j,2),zbessi=zbessi(:,j,:,:),zbessk=zbessk(:,j,:,:),zilmt=zilmt(j,:,:),&
-                     & rpseudo_in=rpseudo,rpseudomat=rpseudomat(ifit2,:,:,:))
+                     & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,ifit2))
                      pot%mtrlm(:,:,:,1)=pot%mtrlm(:,:,:,1)+potmt0 * erfc_fit(j,1)
                      potir=potir+potir0 * erfc_fit(j,1)
                   enddo
@@ -467,7 +498,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                      & prodir(:), potmt0, potir0, zrho02,v, &
                      & cutoff=cutoff,hybrid_in=.true.,yukawa_in=.true., &
                      & zlambda_in=conjg(erfc_fit(j,2)),zbessi=conjg(zbessi(:,j,:,:)),zbessk=conjg(zbessk(:,j,:,:)),zilmt=conjg(zilmt(j,:,:)),&
-                     & rpseudo_in=rpseudo,rpseudomat=rpseudomat(ifit2,:,:,:))
+                     & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,ifit2))
                      pot%mtrlm(:,:,:,1)=pot%mtrlm(:,:,:,1)+potmt0 * conjg(erfc_fit(j,1))
                      potir=potir+potir0 * conjg(erfc_fit(j,1))
                   enddo
@@ -477,11 +508,11 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                   potmt0=zzero
                   potir0=zzero
 
-          Call coulomb_potential2vFeld(qlmir_new, qlmir, nrcmt, rcmt, ngvec, gqc, igq0, &
-                  & jlgqr, ylmgq, sfacgq, zn, prod%mtrlm(:,:,:,1), &
-                  & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v, &
+                  Call coulomb_potential3 (qlmir_new,nrcmt, rcmt, ngvec, gqc, igq0, &
+                  & jlgqr, ylmgq, sfacgq, prod%mtrlm(:,:,:,1), &
+                  & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v,qmtlm(:,:,ist2), &
                   & cutoff=cutoff, hybrid_in=.true.,&
-                  & rpseudo_in=rpseudo,rpseudomat=rpseudomat(1,:,:,:))
+                  & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1))
 
 !                  if (input%groundstate%hybrid%erfcapprox.ne."PW")then 
 !                     pot%mtrlm(:,:,:,1)=potmt0
@@ -582,23 +613,39 @@ endif
                endif
 
    !-----------------------------------------------------------------------------------1
+if(.false.)then
+ write(*,*) 'debug' 
+ open(11,file='mt_test.dat',status='replace')
+ do ir=1, nrmt(1)
+ write(11,*) spr(ir,1),dble(pot%mtrlm(1,ir,1,1))
+!  write(11,*) spr(ir,is),",",dble(zpot(1,ir))*y00 
+ enddo
+ close(11)
+ stop
+endif
                
    call timesec(tc)
-               call prodshrs(pot%mtrlm(:,:,:,1),wf2%mtmesh(:,:,:,ist2),prod%mtrlm(:,:,:,1))
-!               call genWFonMeshOne(pot)
-!               pot%mtmesh=conjg(pot%mtmesh)
-!   call timesec(td)
-!   time_misc=time_misc+td-tc
+!               call prodshrs(pot%mtrlm(:,:,:,1),wf2%mtmesh(:,:,:,ist2),prod%mtrlm(:,:,:,1))
+               call prodshrs2(pot%mtrlm(:,:,:,1),wf2%mtmesh(:,:,:,ist2))
 
-!   call timesec(tc)
-!               call WFprodrs(1,pot,ist2,wf2,prod)
    call timesec(td)
    time_misc=time_misc+td-tc
+
+if(.false.)then
+ write(*,*) 'debug' 
+ open(11,file='mt_test.dat',status='replace')
+ do ir=1, nrmt(1)
+ write(11,*) spr(ir,1),dble(pot%mtrlm(1,ir,1,1))
+!  write(11,*) spr(ir,is),",",dble(zpot(1,ir))*y00 
+ enddo
+ close(11)
+ stop
+endif
+
 !   time_rs=time_rs+td-tc
 
    call timesec(tc)
                vxpsiirtmp(:) = potir(:)*wf2ir(:)*cfunir(:)
-!               vxpsiirtmp(:) = vxpsiirtmp(:)*cfunir(:)
    call timesec(td)
    time_prod=time_prod+td-tc
    ! ----------------------------------------------------------------------------------
@@ -618,14 +665,26 @@ endif
                Do igk=1, Gkqset%ngk (1, ik)
                   vxpsiirgk(igk, ist3)=vxpsiirgk(igk, ist3)+vxpsigktmp(igk)
                End Do
-               zvclmt(:,:,:,ist3)=zvclmt(:,:,:,ist3)+prod%mtrlm(:,:,:,1)*wkptnr(jk)
+!               vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+prod%mtrlm(:,:,:,1)*wkptnr(jk)
+               vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+pot%mtrlm(:,:,:,1)*wkptnr(jk)
 !$OMP END CRITICAL
                call timesec(td)
                time_critical=time_critical+td-tc
 !write(*,*) ist2,ist3               
-            End Do ! ist3
+            End Do ! ist2
 !$OMP END DO NOWAIT
-         End Do ! ist2
+         End Do ! ist3
+
+
+         call timesec(tc)
+!$OMP DO
+         do ist3=1,nstsv
+           call expandinpb(vxpbtot(:,:,:,ist3),prod)
+           vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+prod%mtrlm(:,:,:,1)*wkptnr(jk)
+         enddo
+!$OMP END DO NOWAIT
+         call timesec(td)
+         time_rs=time_rs+td-tc
 
          call WFRelease(prod)
          call WFRelease(pot)
@@ -637,10 +696,12 @@ endif
          Deallocate (potmt0)
          Deallocate (vxpsiirtmp)
          Deallocate (vxpsigktmp)
-    if (allocated(qlmir)) deallocate(qlmir)
+   ! if (allocated(qlmir)) deallocate(qlmir)
 
     !deallocate(qlmir_new)
 !$OMP END PARALLEL
+         call WFRelease(wf2)
+         call WFRelease(prod)
     deallocate (q_nnLM_is)
 
 call timesec(ta)
@@ -655,18 +716,21 @@ if (print_times) then
    write(*,*) '  time_pw :',time_pw
       write(*,*) '  time_qlm :', time_qlm
 endif
-         vxpsimt=vxpsimt+zvclmt
       End Do ! non-reduced k-point set
 !stop
 !----------------------------------------------!
 !     valence-core-valence contribution        !
 !----------------------------------------------!
 call timesec(ta)
-      zvclmt (:, :, :, :) = 0.d0
-            
+
+      call genWFinMT(wf1)
+      call genWFonMesh(wf1)
+
+         
       Allocate (zrhomt(lmmaxvr, nrcmtmax))
       allocate (rfmt(nrcmtmax))
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(nrc,is,ia,ias,ist2,ist3,l,norm,lm,m,ir,uir,wfcr1,zrhomt,zfmt,ifit,zfmt0,zvcltp,rfmt,ipt)
+      Allocate (zfmt(lmmaxvr, nrcmtmax),zfmt0(lmmaxvr, nrcmtmax),zfmt1(lmmaxvr, nrcmtmax))
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(nrc,is,ia,ias,ist2,ist3,l,norm,lm,m,ir,uir,wfcr1,zrhomt,zfmt,ifit,zfmt0,zfmt1,zvcltp,rfmt,ipt)
       Do is = 1, nspecies
         if (spnst (is).ne.0) then
           nrc = nrcmt(is)
@@ -679,6 +743,7 @@ call timesec(ta)
 !$OMP DO SCHEDULE(DYNAMIC)
         ! Begin loop over occupied   and empty states!!
             Do ist3 = 1, nstsv
+              zfmt1=0d0
               Do ist2 = 1, spnst (is) !This is essentially ncore(is)
                 If (spcore(ist2, is)) Then
                   l = spl(ist2, is)
@@ -728,11 +793,15 @@ call timesec(ta)
                 End Do ! ir
 
                      Call zgemm ('N', 'N', lmmaxvr, nrcmt(is), ntpll, zone, &
-                      & zfshthf, lmmaxvr, zvcltp, ntpll, zone, zvclmt(1,1,ias,ist3), lmmaxvr)
+                      & zfshthf, lmmaxvr, zvcltp, ntpll, zone, zfmt1, lmmaxvr)
 
                    End Do ! m
                  End If ! spcore(ist2, is)
               End Do ! ist2
+!$OMP CRITICAL
+              vxpsimt(:,:,ias,ist3)=vxpsimt(:,:,ias,ist3)+zfmt1 !rod%mtrlm(:,:,:,1)*wkptnr(jk)
+!$OMP END CRITICAL
+
             End Do ! ist3
 !$OMP END DO
           End Do ! ia
@@ -743,7 +812,8 @@ call timesec(ta)
 call timesec(tb)
 if (print_times) write(*,*) 'vcv :',tb-ta
 
-      vxpsimt=vxpsimt+zvclmt
+
+
       Allocate (wf1ir(ngrtot))
       Allocate (vxpsiirtmp(ngrtot))
 call timesec(ta)
@@ -811,11 +881,11 @@ end if
       Deallocate (ylmgq, sfacgq)
       Deallocate (wfcr1)
       Deallocate (wf1ir)
-      Deallocate (zvcltp, zfmt, zfmt0)
+      Deallocate (zvcltp, zfmt, zfmt0,zfmt1)
       Deallocate (vxpsiirtmp)
 !      Deallocate (vxpsiirtmp)   
 !      Deallocate (vxpsigktmp)   
-      Deallocate (zvclmt) 
+      !Deallocate (zvclmt) 
       if (allocated(jlgqsmallr)) then
          deallocate(jlgqsmallr)
       endif
@@ -827,8 +897,8 @@ end if
       endif
 
       call WFRelease(wf1)
-      call WFRelease(wf2)
-      call WFRelease(prod)
+      !call WFRelease(wf2)
+      !call WFRelease(prod)
   if (allocated(q_nnLM_is)) then
     deallocate(q_nnLM_is)
   end if

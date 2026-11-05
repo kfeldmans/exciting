@@ -129,8 +129,8 @@ Real (8) Function oldwigner3j (j1, j2, j3, m1, m2, m3)
   Integer :: k, k1, k2, l1, l2, l3, n1, n2
   Real (8) :: sgn, sum, t1
 ! external functions
-  Real (8) :: factnm, factr
-  External factnm, factr
+  Real (8) , external:: factnm, factr
+!External factnm, factr
 ! check input variables
   If ((j1 .Lt. 0) .Or. (j2 .Lt. 0) .Or. (j3 .Lt. 0) .Or. (Abs(m1) &
     & .Gt. j1) .Or. (Abs(m2) .Gt. j2) .Or. (Abs(m3) .Gt. j3)) Then

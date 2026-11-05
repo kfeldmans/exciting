@@ -11,8 +11,8 @@ module weinert
   private
 
   public :: surface_ir, multipoles_ir, poisson_ir
-  public :: poisson_and_multipoles_mt, match_bound_mt
-  public :: poisson_and_multipoles_mt_yukawa, multipoles_ir_yukawa, pseudocharge_gspace_yukawa, poisson_ir_yukawa
+  public :: poisson_and_multipoles_mt, match_bound_mt, match_bound_mt2
+  public :: poisson_and_multipoles_mt_yukawa, poisson_and_multipoles_mt_yukawa2, multipoles_ir_yukawa, pseudocharge_gspace_yukawa, poisson_ir_yukawa
   public :: poisson_mt_yukawa, pseudocharge_rspace_matrix, pseudocharge_rspace_new
   public :: multipoles_ir2, multipoles_ir3, multipoles_ir4, multipoles_ir5, pseudocharge_gspace2, pseudocharge_gspace3, poisson_ir2, surface_ir2, surface_ir3
   contains
@@ -683,10 +683,146 @@ endif
     endif
   end subroutine match_bound_mt
 
+    subroutine match_bound_mt2( lmax, nr, r, rmt, firsf, fmt, yukawa, zbessi)
+      !> maximum angular momentum \(l\)
+      integer, intent(in) :: lmax
+      !> number of radial grid points
+      integer, intent(in) :: nr
+      !> radial grid
+      real(dp), intent(in) :: r(:)
+      !> muffin-tin radius \(R_\alpha\)
+      real(dp), intent(in) :: rmt
+      !> interstitial function on muffin-tin sphere surface \(f^{{\rm SF},\alpha}_{lm}\)
+      complex(dp), intent(in) :: firsf(:)
+      !> muffin-tin function \(f^\alpha_{lm}(r)\)
+      complex(dp), intent(inout) :: fmt(:,:)
+
+      logical, optional, intent(in) :: yukawa
+      complex(dp),optional, intent(in) :: zbessi(:,0:) !nrmtmax, 0:input%groundstate%lmaxvr+input%groundstate%npsden+1
+      integer :: l, m, lm, ir
+      complex(dp) :: df,zt1
+
+      real(dp), allocatable :: rr(:,:)
+      
+
+      if ((present(yukawa)).and.yukawa) then
+
+        lm = 0
+        do l = 0, lmax
+          do m = -l, l
+            lm = lm + 1
+            zt1 = firsf(lm) - fmt (lm, nr)
+            Do ir = 1, nr
+               fmt (lm, ir) = fmt (lm, ir) + zt1 &
+               & * zbessi(ir,l)/zbessi(nr,l)
+  
+
+            End Do !ir
+          enddo
+        enddo
+      
+      
+      
+      else
+
+
+        allocate( rr(nr,2), source=1._dp)
+        do ir = 1, nr
+          rr(ir,2) = r(ir)/rmt
+        end do
+     
+        lm = 0
+        do l = 0, lmax
+          do m = -l, l
+            lm = lm + 1
+            df = firsf(lm)
+            do ir = 1, nr
+              fmt(lm,ir) = df*rr(ir,1)
+            end do
+          end do
+          do ir = 1, nr
+            rr(ir,1) = rr(ir,1)*rr(ir,2)
+          end do
+        end do
+
+        deallocate( rr)
+    endif
+end subroutine
 
 
 
+subroutine poisson_and_multipoles_mt_yukawa2( lmax, nr, r, zrhomt, zvclmt, qlm, is, yukawa_in ,zlambda, il, kl)
+use modinteg
+use constants, only: fourpi
+!> maximum angular momentum \(l\)
+integer, intent(in) :: lmax
+!> number of radial grid points
+integer, intent(in) :: nr
+!> radial grid
+real(dp), intent(in) :: r(:)
+!> complex charge distribution \(n^\alpha_{lm}(r)\)
+complex(dp), intent(in) :: zrhomt(:,:)
+!> complex electrostatic potential \(v_{\rm sph}[n^\alpha_{lm}](r)\)
+complex(dp), intent(out) :: zvclmt(:,:)
+!> multipole moments of the charge distribution \(q^{{\rm MT},\alpha}_{lm}\)
+complex(dp), intent(out) :: qlm(:)
+integer, intent(in) :: is
+logical, optional, intent(In) :: yukawa_in
+Complex (8),optional,Intent (In) :: il(:,0:), kl(:,0:),zlambda
 
+
+integer :: l, m, lm
+
+
+complex(dp) :: zt1,zt2
+logical :: yukawa
+!external functions
+Real (8) :: factnm
+External factnm
+
+if(present(yukawa_in))then 
+  yukawa=yukawa_in
+  call poisson_mt_yukawa( lmax, nr, r, zrhomt(:, :), zvclmt, is, &
+                               & yukawa_in=yukawa,zlambda=zlambda, il=il(:,:), kl=kl(:,:))
+else
+  yukawa=.false.
+call poisson_mt_yukawa2( lmax, nr, r, zrhomt(:, :), zvclmt, qlm, is)
+
+endif
+
+
+
+if(yukawa)then
+  lm=0
+  Do l = 0, lmax
+    zt1 = factnm (2*l+1, 2) / (zlambda ** l)
+    zt2 = 1d0 / ( kl(nr,l)* fourpi * zlambda)
+    Do m = - l, l
+      lm = lm + 1
+      qlm (lm) = zt1 * zt2 * zvclmt (lm,nr)
+    End Do
+  enddo
+else
+  lm=0
+  Do l = 0, lmax
+    Do m = - l, l
+      lm = lm + 1
+!      qlm (lm) = (2*l+1) * r(nr)**(l+1) *zvclmt (lm,nr) / fourpi
+    End Do
+  enddo
+endif
+
+!write(*,*)"mans"
+!do ir=1, nr
+  !write(*,*)dble(il(ir, 0)),",",imag(il(ir, 0))
+  !write(*,*)dble(zrhomt(1, ir)),",",imag(zrhomt(1, ir))
+  !write(*,*)dble(zvclmt (1, ir)),",", imag(zvclmt (1, ir))
+!enddo
+!stop
+!write(*,*)qlm(1:3)
+
+
+end subroutine
 
 
 
@@ -1007,8 +1143,6 @@ End Do
   end subroutine poisson_ir_yukawa
 
 
-
-
   subroutine poisson_mt_yukawa( lmax, nr, r, zrhomt, zvclmt,is, yukawa_in,zlambda, il, kl)
     use modinteg
     use constants, only: fourpi,zzero
@@ -1124,6 +1258,127 @@ End Do
     
        
   end subroutine poisson_mt_yukawa
+
+
+  subroutine poisson_mt_yukawa2( lmax, nr, r, zrhomt, zvclmt, qlm, is, yukawa_in,zlambda, il, kl)
+    use modinteg
+    use constants, only: fourpi,zzero
+    !> maximum angular momentum \(l\)
+    integer, intent(in) :: lmax
+    !> number of radial grid points
+    integer, intent(in) :: nr
+    !> radial grid
+    real(dp), intent(in) :: r(:)
+    !> complex charge distribution \(n^\alpha_{lm}(r)\)
+    complex(dp), intent(in) :: zrhomt(:,:)
+    !> complex electrostatic potential \(v_{\rm sph}[n^\alpha_{lm}](r)\)
+    complex(dp), intent(out) :: zvclmt(:,:)
+    complex(dp), intent(out) :: qlm(:)
+    integer, intent(in) :: is
+
+    Complex (8),optional,Intent (In) :: il(:,0:), kl(:,0:),zlambda
+    logical, optional, intent(In) :: yukawa_in
+ 
+    integer :: l, m, lm, ir
+    
+    complex(dp) :: f1(nr),f2(nr),g1(nr),g2(nr),zt1,zrho_tmp(nr)
+    real(dp)  :: t1 
+    complex(dp) ,allocatable :: rl(:),ril1(:),ri(:),r2(:),tr1(:),tr2(:)
+    logical :: yukawa
+    
+    if(present(yukawa_in))then 
+      yukawa=yukawa_in
+    else
+      yukawa=.false.
+    endif
+
+    zvclmt=zzero
+    
+    if(yukawa) then
+      zt1=fourpi * zlambda 
+      allocate(r2(nr))
+      r2=r(:nr)*r(:nr)
+      lm = 0
+      Do l = 0, lmax
+        Do m= -l, l
+            lm = lm + 1
+            zrho_tmp = zrhomt(lm, :nr)
+            f1 = il(:nr,l) * r2 * zrho_tmp
+            call integ_cf (nr, is, f1, g1, mt_integw)
+            f1 = kl(:nr,l) * g1
+            f2 = kl(:nr,l) * r2 * zrho_tmp
+            call integ_cf (nr, is, f2, g2, mt_integw)
+            f2= il(:nr,l) * (g2(nr)-g2)
+            zvclmt (lm, :nr)=zt1 * (f1+f2)
+        Enddo
+      enddo
+      deallocate(r2)
+    else !not Yukawa
+      allocate(rl(nr),ril1(nr),ri(nr),r2(nr),tr1(nr),tr2(nr))
+      
+      rl(:) = 1d0          !r^l
+      ri(:) = 1d0/r(:nr)
+      ril1(:) = 1d0/r(:nr) ! r^(-l-1)
+      r2=r(:nr)*r(:nr)
+
+      lm = 0
+      Do l = 0, lmax
+        t1 = fourpi/(2*l+1)
+        tr1=rl*r2
+        tr2=ril1*r2
+        Do m= -l, l
+          lm = lm + 1
+          zrho_tmp = zrhomt(lm, :nr)
+          f1=zrho_tmp*tr1
+          call integ_cf (nr, is, f1, g1, mt_integw)
+          f1=g1*ril1 !/ r(:nr)**(l+1)
+
+          f2=zrho_tmp*tr2 !/r(:nr)**(l-1)
+          call integ_cf (nr, is, f2, g2, mt_integw)
+          f2= rl * (g2(nr)-g2)
+
+
+          qlm(lm)=(2*l+1) * r(nr)**(l+1) *t1*(f1(nr)+f2(nr)) / fourpi
+          zvclmt (lm, :nr)=t1*((f1+f2) - (f1(nr)+f2(nr))*rl(:)/rl(nr))
+
+        Enddo
+        ! update r^l and r^(-l-1)
+        if( l < lmax) then
+          rl = rl*r(:nr)
+          ril1 = ril1*ri
+        end if
+      enddo
+      deallocate(rl,ril1,ri,r2,tr1,tr2)
+
+
+
+
+
+
+
+      ! lm = 0
+      ! Do l = 0, lmax
+      !   Do m= -l, l
+      !     lm = lm + 1
+      !     f1=zrhomt(lm, :nr)*r(:nr)**(l+2)
+      !     call integ_cf (nr, is, f1, g1, mt_integw)
+      !     f1=g1 / r(:nr)**(l+1)
+
+      !     f2=zrhomt(lm, :nr)/r(:nr)**(l-1)
+      !     call integ_cf (nr, is, f2, g2, mt_integw)
+      !     f2= r(:nr)**(l)* (g2(nr)-g2)
+          
+      !     !f3=-r(:nr)**(l)*g1(nr)/r(nr)**(2*l+1)
+
+      !     zvclmt (lm, :nr)=fourpi *(f1+f2)/(2*l+1)
+      !   Enddo
+      ! enddo
+
+    endif! if yukawa or not
+ 
+    
+       
+    end subroutine
 
 
     subroutine pseudocharge_rspace_matrix(lmax,npsd,kvec,mat,yukawa_in,zlambda,zilmt,zbessi)
@@ -1280,6 +1535,7 @@ End Do
       use modrspace, only: rgrid_mt_map, rgrid_nmtpoints
       use mod_atoms, only: nspecies, natoms, natmtot,idxas
       use mod_Gvector, only: ngrtot, ngrid
+      use constants, only: zzero,zone 
       implicit none
       
       integer, intent(in) :: lmax
@@ -1291,8 +1547,8 @@ End Do
       real(8) :: ta,tb,tc,td
 
       ! external functions
-      Complex (8) :: zdotc
-      External :: zdotc
+      Complex (8) :: zdotu
+      External :: zdotu
 
       call timesec(ta)
       call zfftifc( 3, ngrid, 1, zvclir)
@@ -1307,31 +1563,13 @@ End Do
 ! !$OMP DO SCHEDULE(DYNAMIC)
           do igr=1, rgrid_nmtpoints(ias)
             ig=rgrid_mt_map(igr,ias)
-            zt1=sum(qlm(:,ias)*rpseudomat(:,igr,ias))
-            !zt1=zdotc(lmmax, qlm(:,ias), 1, rpseudomat(:,igr,ias), 1)
-            zvclir(ig)=zvclir(ig)+zt1
+            zvclir(ig)=zvclir(ig)+zdotu(lmmax, qlm(:,ias), 1, rpseudomat(:,igr,ias), 1)
+
           enddo !igr
 ! !$OMP END DO NOWAIT
         enddo !ia
-      enddo !is
+      enddo !is 
 ! !$OMP END PARALLEL 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-      ! do is=1, nspecies
-      !   do ia=1, natoms(is)
-      !     ias=idxas(ia,is)
-      !     do igr=1, rgrid_nmtpoints(ias)
-      !       ig=rgrid_mt_map(igr,ias)
-      !       lm=0
-      !       Do l = 0,lmax
-      !         Do m = - l, l
-      !           lm = lm+1
-      !           zvclir(ig)=zvclir(ig) + qlm(lm,ias)*rpseudomat(lm,igr,ias)
-      !         enddo ! m
-      !       enddo
-      !     enddo !igr
-      !   enddo !ia
-      ! enddo !is
-  
         
       call timesec(tc)
       call zfftifc( 3, ngrid, -1, zvclir)

@@ -4,7 +4,7 @@ module potentials
   implicit none
   private
 
-  public :: coulomb_potential, coulomb_potential2, coulomb_potential2vFeld
+  public :: coulomb_potential, coulomb_potential2, coulomb_potential3, coulomb_potential2vFeld
 
   contains
 
@@ -70,7 +70,7 @@ complex(dp), intent(out) :: zvclmt(:,:,:) ! lm, nrmax, natoms
 !> complex interstitial Coulomb potential
 complex(dp), intent(out) :: zvclir(:)
 !> Fourier component of pseudocharge density for shortest \({\bf G+p}\) vector
-complex(dp), intent(out) :: zrho0
+complex(dp), intent(in) :: zrho0
 real(8), intent(in) :: qvec(3)
 !> option for using coulomb cutoff for solving Poisson's equation
 logical, optional, intent(in) :: cutoff
@@ -666,6 +666,285 @@ end subroutine coulomb_potential2
 
 
   end subroutine coulomb_potential2vFeld
+
+
+!-----
+  subroutine coulomb_potential3(qlmir_in, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, qmtlm, cutoff,&
+    & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat)
+use modsurf, only: surf_pot
+use constants, only: y00,zzero
+use modinput
+use mod_atoms, only: natmtot, nspecies, natoms, idxas
+use mod_muffin_tin, only: lmmaxvr, rmt, nrmtmax
+use mod_Gvector, only: ngrtot, ngrid, ivg, intgv, igfft, ivgig
+use mod_potential_and_density, only: vmad
+use mod_convergence, only: iscl
+use weinert
+!> multipoles of ?pseudo?-co-density
+complex(dp), allocatable, intent(in) :: qlmir_in(:,:)
+!> number or radial grid points for each species
+integer, intent(in) :: nr(:)
+!> radial grid for each species
+real(dp), intent(in) :: r(:,:)
+!> total number of \({\bf G+p}\) vectors
+integer, intent(in) :: ngp
+!> lengths of \({\bf G+p}\) vectors
+real(dp), intent(in) :: gpc(:)
+!> index of shortest \({\bf G+p}\) vector
+integer, intent(in) :: igp0
+!> spherical Bessel functions \(j_l(|{\bf G+p}| R_\alpha)\)
+real(dp), intent(in) :: jlgpr(0:,:,:)
+!> spherical harmonics \(Y_{lm}(\widehat{\bf G+p})\)
+complex(dp), intent(in) :: ylmgp(:,:)
+!> structure factors \({\rm e}^{{\rm i} ({\bf G+p}) \cdot {\bf \tau}_\alpha}\)
+complex(dp), intent(in) :: sfacgp(:,:)
+!> complex muffin-tin charge density
+complex(dp), intent(in) :: zrhomt(:,:,:)
+!> complex interstitial charge density
+complex(dp), intent(In) :: zrhoir(:)
+!> complex muffin-tin Coulomb potential
+complex(dp), intent(out) :: zvclmt(:,:,:) ! lm, nrmax, natoms
+!> complex interstitial Coulomb potential
+complex(dp), intent(out) :: zvclir(:)
+!> Fourier component of pseudocharge density for shortest \({\bf G+p}\) vector
+complex(dp), intent(in) :: zrho0
+real(8), intent(in) :: qvec(3)
+complex(dp), intent(in) :: qmtlm(:,:)
+!> option for using coulomb cutoff for solving Poisson's equation
+logical, optional, intent(in) :: cutoff
+logical, optional, intent(in) :: hybrid_in
+logical, optional, intent(in) :: yukawa_in
+complex(dp), optional, intent(in) :: zlambda_in
+!      complex(dp), optional, intent(in) :: zbessi(nrmtmax,0:input%groundstate%lmaxvr+input%groundstate%npsden+1,nspecies)
+!      complex(dp), optional, intent(in) :: zbessk(nrmtmax,0:input%groundstate%lmaxvr+input%groundstate%npsden+1,nspecies)
+complex(dp), optional, intent(in) :: zbessi(:,0:,:)!(nrmtmax, 0:input%groundstate%lmaxvr+input%groundstate%npsden+1, nspecies)
+complex(dp), optional, intent(in) :: zbessk(:,0:,:) 
+complex(dp), optional, intent(in) :: zilmt(0:,:)  
+real(dp), allocatable :: vdplmt(:,:,:), vdplir(:)
+complex(dp), allocatable :: qlm(:,:), qlmir(:,:), zrhoig(:)
+logical, optional, intent(in) :: rpseudo_in
+complex(dp), optional, intent(in) :: rpseudomat(:,:,:)
+
+logical :: yukawa
+logical :: hybrid, rpseudo
+complex(dp) :: zlambda
+
+integer :: is, ia, ias, ir,j
+integer :: ig, ifg, lm
+
+real(dp) :: t1, ta, tb,tc,td,te,tf
+
+complex(dp), allocatable :: zrhoig_sort(:)
+real(dp) :: maxrhog
+integer :: ngp2
+
+if (present(hybrid_in)) then 
+hybrid=hybrid_in
+else
+hybrid=.false.
+endif
+
+if (present(yukawa_in)) then
+yukawa=yukawa_in
+else
+yukawa=.false.
+endif
+
+if (present(zlambda_in)) then
+zlambda=zlambda_in
+endif
+
+if (present(rpseudo_in)) then
+rpseudo=rpseudo_in
+else
+rpseudo=.false.
+endif
+
+
+allocate( qlm( lmmaxvr, natmtot),qlmir( lmmaxvr, natmtot))
+allocate( zrhoig( ngrtot))
+
+! solve Poisson's equation in each muffin-tin sphere
+! and find muffin-tin multipoles
+
+
+do is = 1, nspecies
+  do ia = 1, natoms(is)
+  ias = idxas(ia,is)
+    if(yukawa) then
+      call poisson_and_multipoles_mt_yukawa ( input%groundstate%lmaxvr, nr(is), r(:,is), zrhomt(:,:,ias), zvclmt(:,:,ias), qlm(:,ias), is,&
+          & yukawa_in=yukawa,zlambda=zlambda, il=zbessi(1:nr(is),0:input%groundstate%lmaxvr,is), kl=zbessk(1:nr(is),0:input%groundstate%lmaxvr,is))    
+    else ! Coulumb
+       qlm(:,ias)=qmtlm(:,ias)
+    endif
+
+  end do
+end do
+
+
+! Fourier transform interstitial density to reciprocal space
+
+zrhoig = zrhoir
+call zfftifc( 3, ngrid, -1, zrhoig)
+allocate(zrhoig_sort(ngp))
+maxrhog=0d0
+do ig=1,ngp
+  zrhoig_sort(ig)=zrhoig(igfft(ig))
+  maxrhog=max(maxrhog,abs(zrhoig_sort(ig)))
+enddo
+
+!#define temp_removal_1237123812038120312312
+#ifdef temp_removal_1237123812038120312312
+ig=ngp 
+  do while (abs(zrhoig_sort(ig)).lt.1d-14*maxrhog)
+    ig=ig-1 
+  enddo
+  if (ig.eq.ngp)then
+    ngp2=ig
+  else
+    ngp2=ig + 1
+  endif
+  call timesec(ta)
+if (yukawa) then
+  call multipoles_ir3( input%groundstate%lmaxvr, ngp2, gpc, &
+    & jlgpr, ylmgp, sfacgp, igfft, &
+    zrhoig_sort, qlmir,zlambda,zilmt)
+else
+  ! multipoles_ir4 - some data in single precision 
+  call multipoles_ir3( input%groundstate%lmaxvr, ngp2, gpc, &
+    & jlgpr, ylmgp, sfacgp, igfft, &
+    zrhoig_sort, qlmir)
+endif
+call timesec(tb)
+#endif temp_removal_1237123812038120312312
+!write(*,*)"multipoles:",tb-ta
+
+! take difference of muffin-tin and interstitial multipole moments
+!qlm = qlm - qlmir
+qlm = qlm - qlmir_in
+
+
+
+ ! !solve Poisson's equation in interstitial region
+call timesec(ta)
+if(rpseudo)then
+
+  do ig=1, ngp   
+    ifg = igfft (ig)
+    zrhoig(ifg)=zrhoig_sort(ig)
+  enddo
+  call pseudocharge_rspace_new(input%groundstate%lmaxvr,qlm,rpseudomat,zrhoig)
+  do ig=1, ngp
+    ifg = igfft (ig)
+    zrhoig_sort(ig)=zrhoig(ifg)
+  enddo
+  call timesec(td)
+  !write(*,*)"kartošana2x :",td-tc+tb-ta
+  !write(*,*)"konstrueshana :",tc-tb 
+else
+  if (yukawa) then
+    call pseudocharge_gspace2(input%groundstate%lmaxvr, ngp, gpc, &
+      & jlgpr, ylmgp, sfacgp, igfft, zrhoig_sort, qlm,zlambda,zilmt)
+  else
+    call pseudocharge_gspace3(input%groundstate%lmaxvr, ngp, gpc, &
+      & jlgpr, ylmgp, sfacgp, igfft, zrhoig_sort, qlm)
+  endif
+endif
+call timesec(tb)
+!write(*,*)"pseudocharge:",tb-ta
+
+call timesec(ta)
+if (yukawa) then
+  call poisson_ir2(ngp, gpc, igfft, zrhoig_sort, zvclir, cutoff, zlambda=zlambda)
+else
+  call poisson_ir2(ngp, gpc, igfft, zrhoig_sort, zvclir, cutoff)
+endif
+call timesec(tb)
+!write(*,*)"poisson_ir:", tb-ta
+  ! zrhoig_sort(1:ngp)=zvclir(1:ngp)
+  ! zvclir(:)=zzero
+  ! do ig=1, ngp   
+  !  ifg = igfft (ig)
+  !  zvclir(ifg)=zrhoig_sort(ig)
+  ! enddo
+
+
+call timesec(ta)
+
+if (input%groundstate%hybrid%rsurf) then
+  zrhoig_sort(1:ngp)=zvclir(1:ngp)
+  zvclir(:)=zzero
+  do ig=1, ngp   
+    ifg = igfft (ig)
+    zvclir(ifg)=zrhoig_sort(ig)
+  enddo
+  call zfftifc( 3, ngrid, 1, zvclir)
+  
+  call surf_pot(input%groundstate%lmaxvr,zvclir,igfft,qvec,qlmir)
+else
+  call surface_ir3( input%groundstate%lmaxvr, ngp, jlgpr, ylmgp, sfacgp, zvclir, qlmir)
+! Fourier transform interstitial potential to real space
+  zrhoig_sort(1:ngp)=zvclir(1:ngp)
+  zvclir(:)=zzero
+  do ig=1, ngp   
+    ifg = igfft (ig)
+    zvclir(ifg)=zrhoig_sort(ig)
+  enddo
+  call zfftifc( 3, ngrid, 1, zvclir)
+endif
+
+
+  call timesec(tb)
+
+
+call timesec(ta)
+! match muffin-tin and interstitial potential on muffin-tin boundaries
+!debug
+!do lm=1,lmmaxvr
+!  write(*,*) dble(qlmir(lm,1))
+!enddo
+
+do is = 1, nspecies
+do ia = 1, natoms(is)
+ias = idxas(ia,is)
+if (present(zbessi)) then
+ call match_bound_mt( input%groundstate%lmaxvr, nr(is), r(:,is), rmt(is), qlmir(:,ias), zvclmt(:,:,ias),yukawa=yukawa, zbessi=zbessi(:,:,is) )
+else
+ call match_bound_mt2( input%groundstate%lmaxvr, nr(is), r(:,is), rmt(is), qlmir(:,ias), zvclmt(:,:,ias),yukawa=yukawa)
+endif
+end do
+end do
+call timesec(tb)
+
+!write(*,*)"match_bound_mt",tb-ta
+
+
+
+deallocate( zrhoig, qlm, qlmir,zrhoig_sort)
+
+if(.false.)then
+open(11,file='mt_rez.dat',status='replace')
+is=1
+lm=1
+do ir=1, nr(is)
+write(11,*)r(ir,is),",",dble(zvclmt (lm, ir, is))*y00
+enddo
+close(11)
+
+open(11,file='is_rez.dat',status='replace')
+Do ig = 1, ngrtot
+t1 = gpc (ig)
+write(11,*)dble(zvclir(ig))
+End Do
+close(11)
+!stop
+endif
+
+
+
+end subroutine coulomb_potential3
+
+
 
 
 

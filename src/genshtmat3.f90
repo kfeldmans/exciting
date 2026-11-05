@@ -88,9 +88,22 @@ Subroutine genshtmat3
       Allocate (sphcov(4, ntpll))
       If (allocated(sphcovtp)) deallocate (sphcovtp)
       Allocate (sphcovtp(2, ntpll))
-      !Call ld0770(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
-      !Call ld0434(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
-      Call ld0194(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+!      Call ld0086(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+if (.true.) then
+      if (ntpll.eq.86) then
+        Call ld0086(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+      elseif (ntpll.eq.146) then
+        Call ld0146(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+      elseif (ntpll.eq.194) then
+        Call ld0194(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+      else
+        Call ld0434(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+      endif
+else 
+       
+        Call ld0770(sphcov (1, :),sphcov (2, :),sphcov (3, :),sphcov (4, :),ntpll)
+
+endif
       tp(1,:) = atan2(sqrt(sphcov(1,:)**2+sphcov(2,:)**2),sphcov(3,:))
       tp(2,:) = atan2(sphcov(2,:),sphcov(1,:))
       ! sphcovtp (:, :) = tp (:, :)

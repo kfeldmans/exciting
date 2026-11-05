@@ -41,7 +41,7 @@ Module mod_eigensystem
    logical :: h1on
    !> complex Gaunt coefficient array
    Complex(8), Allocatable :: gntyry(:, :, :), gntryy(:, :, :), gntnonz(:)
-   real(8), allocatable :: gntyyy(:,:,:)
+   real(8), allocatable :: gntyyy(:,:,:),gntyyyT(:,:,:),gntlyy(:,:,:), gntyyl(:,:,:),gntyly(:,:,:)
    !> list of non-zero Gaunt coefficients
    Integer, Allocatable :: gntnonzlm1(:), gntnonzlm2(:), gntnonzlm3(:), gntnonzlindex(:), gntnonzl2index(:, :)
    !> another compact list of Gaunt coefficients
@@ -529,6 +529,9 @@ Contains
 
      if (allocated(wf%mt)) then
        deallocate(wf%mt)
+     endif
+     if (allocated(wf%mtordered)) then
+       deallocate(wf%mtordered)
      endif
 !     nullify(wf%mt)
      if (allocated(wf%gk)) then
@@ -1023,6 +1026,252 @@ call timesec(tb)
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !! VERSION OF WFprodrs subroutine that works faster STARTS HERE !!
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+     subroutine WFprodrs2(ist1,wf1,ist2,wf2,prod)
+      use modinput
+      use mod_APW_LO
+      use mod_atoms
+      use mod_muffin_tin
+      use mod_eigenvalue_occupancy
+      use constants, only : zzero, zone
+      use mod_SHT
+      use mod_Gvector, only : ngrtot
+ ! !USES:
+ ! !DESCRIPTION:
+ ! Evaluates a product of two WFs in the real space
+ !
+ ! !REVISION HISTORY:
+ !   Created 2021 (Andris)
+ !EOP
+ !BOC
+      implicit none
+      integer, intent(in) :: ist1,ist2
+      type (WFType) :: wf1,wf2,prod
+      integer :: is,ia,ias
+      integer :: l1,l3,m1,m3,lm1,lm3,lm2,io1,io2,if1,if3,if1old,if3old,ilo1,ilo2,lmmaxprod,lm,ir,l,m,ilo,io
+      integer :: blkstart,chunksize,iroffset
+      integer, parameter :: blksize=32
+      complex(8), allocatable :: factors(:), rho(:,:), fr(:), mtmesh(:,:), angmesh(:)
+      complex(8), allocatable :: mtmesh1(:,:), mtmesh2(:,:), mtrlm1(:,:), mtrlm2(:,:)
+      complex(8) :: zt
+      real(8) :: ta,tb
+ 
+      if (.not.allocated(prod%ir)) allocate(prod%ir(ngrtot,1))
+      if (.not.allocated(prod%mtrlm)) allocate(prod%mtrlm(lmmaxvr,nrmtmax,natmtot,1))
+ 
+! call timesec(ta)
+ 
+      allocate(mtmesh (ntpll,blksize))
+      allocate(mtmesh1(ntpll,blksize))
+      allocate(mtmesh2(ntpll,blksize))
+      allocate(mtrlm1(blksize,lmmaxvr))
+      allocate(mtrlm2(blksize,lmmaxvr))
+!      allocate(angmesh(ntpll))
+
+
+!------
+
+      do is=1,nspecies
+        do ia=1,natoms(is)
+          ias=idxas(ia,is)
+
+ 
+          chunksize=blksize
+
+
+          do iroffset=1,nrmt(is),blksize
+            if (iroffset+blksize-1.gt.nrmt(is)) chunksize=nrmt(is)+1-iroffset
+
+!-----------
+! expand WFs in spherical harmonics
+!-----------
+            mtrlm1=0d0
+            mtrlm2=0d0
+            ias=idxas(ia,is)
+            if1=0
+! APW part
+            do l=0,input%groundstate%lmaxvr
+              do io = 1, apword (l, is)
+                do m=-l,l
+                  lm=idxlm(l,m)
+                  if1=if1+1
+                  mtrlm1(1:chunksize,lm)=mtrlm1(1:chunksize,lm)+wf1%mt(if1,ist1,ias)*apwfr(iroffset:iroffset+chunksize-1,1,io,l,ias)
+                  mtrlm2(1:chunksize,lm)=mtrlm2(1:chunksize,lm)+wf2%mt(if1,ist2,ias)*apwfr(iroffset:iroffset+chunksize-1,1,io,l,ias)
+!                  call zaxpy (chunksize, wf1%mt(if1,ist1,ias), apwfr(iroffset,1,io,l,ias), 1, mtrlm1(1,lm), 1)
+!                  call zaxpy (chunksize, wf2%mt(if1,ist2,ias), apwfr(iroffset,1,io,l,ias), 1, mtrlm2(1,lm), 1)
+                enddo
+              enddo
+            enddo
+
+! local-orbital functions
+            Do ilo = 1, nlorb (is)
+              l = lorbl (ilo, is)
+              Do m = - l, l
+                if1=if1+1
+                lm = idxlm (l, m)
+                 mtrlm1(1:chunksize,lm)=mtrlm1(1:chunksize,lm)+wf1%mt(if1,ist1,ias)*lofr(iroffset:iroffset+chunksize-1,1,ilo,ias)
+                 mtrlm2(1:chunksize,lm)=mtrlm2(1:chunksize,lm)+wf2%mt(if1,ist2,ias)*lofr(iroffset:iroffset+chunksize-1,1,ilo,ias)
+!                 call zaxpy (chunksize, wf1%mt(if1,ist1,ias), lofr(iroffset,1,ilo,ias), 1, mtrlm1(1,lm), 1)
+!                 call zaxpy (chunksize, wf2%mt(if1,ist2,ias), lofr(iroffset,1,ilo,ias), 1, mtrlm2(1,lm), 1)
+
+              End Do
+            End Do
+
+
+
+
+            Call zgemm ('N', 'T', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+                       & mtrlm1, blksize, zzero, mtmesh1, ntpll)
+            Call zgemm ('N', 'T', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+                       & mtrlm2, blksize, zzero, mtmesh2, ntpll)
+
+!            Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                       & wf1%mtrlm(1,iroffset,ias,ist1), lmmaxvr, zzero, mtmesh1, ntpll)
+!            Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                       & wf2%mtrlm(1,iroffset,ias,ist2), lmmaxvr, zzero, mtmesh2, ntpll)
+!            mtmesh1(:,1:chunksize)=conjg(wf1%mtmesh(:,iroffset:iroffset+chunksize-1,ias,ist1))
+!            mtmesh2(:,1:chunksize)=      wf2%mtmesh(:,iroffset:iroffset+chunksize-1,ias,ist2)
+            do ir=1,chunksize
+              do lm=1,ntpll
+                 mtmesh(lm,ir)=conjg(mtmesh1(lm,ir))*mtmesh2(lm,ir)   !conjg(wf1%mtmesh(lm,ir,ias,ist1))*wf2%mtmesh(lm,ir,ias,ist2)
+              enddo
+            enddo
+            Call zgemm ('N', 'N', lmmaxvr, chunksize, ntpll, zone, zfshthf, lmmaxvr, mtmesh, ntpll, zzero, prod%mtrlm(1,iroffset,ias,1) , lmmaxvr) ! Genshtmat3
+          enddo
+ 
+        enddo
+      enddo
+      deallocate(mtmesh,mtmesh1,mtmesh2,mtrlm1,mtrlm2)
+      
+
+! call timesec(tb)
+ !write(*,*) tb-ta
+ 
+      !prod%ir(:,1)=conjg(wf1%ir(:,ist1))*wf2%ir(:,ist2)
+      end subroutine WFprodrs2
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! VERSION OF WFprodrs subroutine that works faster ENDS HERE !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+!Hybrid version and no complex conjugation
+     subroutine WFprodrs3(ist1,wf1,ist2,wf2,prod) 
+      use modinput
+      use mod_APW_LO
+      use mod_atoms
+      use mod_muffin_tin
+      use mod_eigenvalue_occupancy
+      use constants, only : zzero, zone
+      use mod_SHT
+      use mod_Gvector, only : ngrtot
+ ! !USES:
+ ! !DESCRIPTION:
+ ! Evaluates a product of two WFs in the real space
+ !
+ ! !REVISION HISTORY:
+ !   Created 2021 (Andris)
+ !EOP
+ !BOC
+      implicit none
+      integer, intent(in) :: ist1,ist2
+      type (WFType) :: wf1,wf2,prod
+      integer :: is,ia,ias
+      integer :: l1,l3,m1,m3,lm1,lm3,lm2,io1,io2,if1,if3,if1old,if3old,ilo1,ilo2,lmmaxprod,lm,ir,l,m,ilo,io
+      integer :: blkstart,chunksize,iroffset
+      integer, parameter :: blksize=64
+      complex(8), allocatable :: factors(:), rho(:,:), fr(:)
+      complex(8) :: mtmesh(ntpll,blksize), mtmesh1(ntpll,blksize), mtrlm1(blksize,lmmaxvr)
+      complex(8) :: zt
+      real(8) :: ta,tb
+ 
+      if (.not.allocated(prod%ir)) allocate(prod%ir(ngrtot,1))
+      if (.not.allocated(prod%mtrlm)) allocate(prod%mtrlm(lmmaxvr,nrmtmax,natmtot,1))
+ 
+! call timesec(ta)
+ 
+
+      do is=1,nspecies
+        do ia=1,natoms(is)
+          ias=idxas(ia,is)
+
+ 
+          chunksize=blksize
+
+
+          do iroffset=1,nrmt(is),blksize
+            if (iroffset+blksize-1.gt.nrmt(is)) chunksize=nrmt(is)+1-iroffset
+
+!-----------
+! expand WFs in spherical harmonics
+!-----------
+            mtrlm1=0d0
+            ias=idxas(ia,is)
+            if1=0
+! APW part
+            do l=0,input%groundstate%lmaxvr
+              do io = 1, apword (l, is)
+                do m=-l,l
+                  lm=idxlm(l,m)
+                  if1=if1+1
+                  mtrlm1(1:chunksize,lm)=mtrlm1(1:chunksize,lm)+wf1%mt(if1,ist1,ias)*apwfr(iroffset:iroffset+chunksize-1,1,io,l,ias)
+!                  mtrlm2(lm,1:chunksize)=mtrlm2(lm,1:chunksize)+wf1%mt(if1,ist1,ias)*apwfr(iroffset:iroffset+chunksize-1,1,io,l,ias)
+!                  mtrlm2(lm,1:chunksize)=mtrlm2(lm,1:chunksize)+wf1%mt(if1,ist1,ias)*apwfr(iroffset:iroffset+chunksize-1,1,io,l,ias)
+                enddo
+              enddo
+            enddo
+
+! local-orbital functions
+            Do ilo = 1, nlorb (is)
+              l = lorbl (ilo, is)
+              Do m = - l, l
+                if1=if1+1
+                lm = idxlm (l, m)
+                 mtrlm1(1:chunksize,lm)=mtrlm1(1:chunksize,lm)+wf1%mt(if1,ist1,ias)*lofr(iroffset:iroffset+chunksize-1,1,ilo,ias)
+!                mtrlm2(lm,1:chunksize)=mtrlm2(lm,1:chunksize)+wf1%mt(if1,ist1,ias)*lofr(iroffset:iroffset+chunksize-1,1,ilo,ias)
+!                 mtrlm2(lm,1:chunksize)=mtrlm2(lm,1:chunksize)+wf1%mt(if1,ist1,ias)*lofr(iroffset:iroffset+chunksize-1,1,ilo,ias)
+              End Do
+            End Do
+
+
+
+
+!            Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                       & mtrlm2, lmmaxvr, zzero, mtmesh1, ntpll)
+!            do lm=1,lmmaxvr
+!              mtrlm1(1:chunksize,lm)=mtrlm2(lm,1:chunksize)
+!            enddo
+            Call zgemm ('N', 'T', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+                       & mtrlm1, blksize, zzero, mtmesh, ntpll)
+!           Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                      & mtrlm2, lmmaxvr, mtmesh1, ntpll)
+
+!           Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                      & wf1%mtrlm(1,iroffset,ias,ist1), lmmaxvr, zzero, mtmesh1, ntpll)
+!           Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                      & mtrlm2, lmmaxvr, zzero, mtmesh2, ntpll)
+
+!            Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll,  &
+!                       & wf2%mtrlm(1,iroffset,ias,ist2), lmmaxvr, zzero, mtmesh2, ntpll)
+            do ir=1,chunksize
+!              do lm=1,ntpll
+                 mtmesh(1:ntpll,ir)=mtmesh(1:ntpll,ir)*conjg(wf2%mtmesh(1:ntpll,iroffset+ir-1,ias,ist2)) !conjg(mtmesh2(lm,ir))   !conjg(wf1%mtmesh(lm,ir,ias,ist1))*wf2%mtmesh(lm,ir,ias,ist2)
+!                 mtmesh(lm,ir)=wf1%mtmesh(lm,iroffset+ir-1,ias,ist1)*conjg(wf2%mtmesh(lm,iroffset+ir-1,ias,ist2)) !conjg(mtmesh2(lm,ir))   !conjg(wf1%mtmesh(lm,ir,ias,ist1))*wf2%mtmesh(lm,ir,ias,ist2)
+!                 mtmesh(lm,ir)=conjg(wf1%mtmesh(lm,iroffset+ir-1,ias,ist1))*wf2%mtmesh(lm,iroffset+ir-1,ias,ist2) !conjg(mtmesh2(lm,ir))   !conjg(wf1%mtmesh(lm,ir,ias,ist1))*wf2%mtmesh(lm,ir,ias,ist2)
+!              enddo
+            enddo
+            Call zgemm ('N', 'N', lmmaxvr, chunksize, ntpll, zone, zfshthf, lmmaxvr, mtmesh, ntpll, zzero, prod%mtrlm(1,iroffset,ias,1) , lmmaxvr) ! Genshtmat3
+          enddo
+ 
+        enddo
+      enddo
+      
+
+! call timesec(tb)
+ !write(*,*) tb-ta
+ 
+      end subroutine WFprodrs3
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! VERSION OF WFprodrs subroutine that works faster ENDS HERE !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
      subroutine WFprodrs(ist1,wf1,ist2,wf2,prod)
       use modinput
       use mod_APW_LO
@@ -1151,9 +1400,6 @@ endif
  
       !prod%ir(:,1)=conjg(wf1%ir(:,ist1))*wf2%ir(:,ist2)
       end subroutine WFprodrs
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!! VERSION OF WFprodrs subroutine that works faster ENDS HERE !!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
      subroutine prodshrs(zfun1,zfun2,zres)
       use modinput
@@ -1201,8 +1447,9 @@ endif
 !      real(8) :: ta,tb
  
 
+if (.true.) then
 !      allocate(mtmesh(ntpll,blksize))
-
+else
       Afsht=dble(zfshthf)
       Bfsht=dimag(zfshthf)
       Cfsht=Afsht+Bfsht
@@ -1210,7 +1457,7 @@ endif
       Absht=dble(zbshthf)
       Bbsht=dimag(zbshthf)
       Cbsht=Absht+Bbsht
-
+endif
 
       do is=1,nspecies
         do ia=1,natoms(is)
@@ -1220,7 +1467,7 @@ endif
           do iroffset=1,nrmt(is),blksize
             if (iroffset+blksize-1.gt.nrmt(is)) chunksize=nrmt(is)+1-iroffset
 
-if (.false.) then
+if (.true.) then
             Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll, zfun1(1,iroffset,ias), lmmaxvr, zzero, mtmesh, ntpll)
             mtmesh(:,1:chunksize)=mtmesh(:,1:chunksize)*zfun2(:,iroffset:iroffset+chunksize-1,ias)
             Call zgemm ('N', 'N', lmmaxvr, chunksize, ntpll, zone, zfshthf, lmmaxvr, mtmesh, ntpll, zzero, zres(1,iroffset,ias) , lmmaxvr)

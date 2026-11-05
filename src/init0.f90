@@ -79,9 +79,23 @@ Subroutine init0
 !------------------------------------!
 !     angular momentum variables     !
 !------------------------------------!
-      !ntpll = 770
+!      ntpll = 770
       !ntpll = 434
-      ntpll = 194
+      !
+! needed for ACE hybrids
+      if (input%groundstate%lmaxvr.le.8) then
+        ntpll = 86
+      elseif (input%groundstate%lmaxvr.le.10) then
+        ntpll = 146
+      elseif (input%groundstate%lmaxvr.le.12) then
+        ntpll = 194
+      else
+        ntpll = 434
+      endif
+!      ntpll = 770
+       ntpll = 86
+
+! 
       lmmaxhf = (2*input%groundstate%lmaxvr+1) ** 2
       lmmaxvr = (input%groundstate%lmaxvr+1) ** 2
       lmmaxapw = (input%groundstate%lmaxapw+1) ** 2

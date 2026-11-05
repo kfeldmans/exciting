@@ -9,6 +9,8 @@ subroutine calc_vxnl()
     use mod_hybrids
     use modfvsystem
     use modmpi
+    use mod_radial
+!
     use modinteg 
     use mod_Feldmans, only: build_B_cache
 ! !DESCRIPTION:
@@ -297,7 +299,22 @@ else ! Use oepvnl
       ! BZ integration weights 
       call kintw()
       deallocate(evalfv)
+  
+      call gengntyyy
+      call init_radial
+!      call init_radial_products
+!      call init_vcoulradial
+      call init_productbasis
+      call init_uproducts
+      call init_pbfpotential
+      call init_radial_v2
+!      call init_productbasis_v2
+!      call init_uproducts_v2
+      call init_productbasis_v3
+      call init_uproducts_v3
 
+!      call release_radial
+!      stop
 
       ! Start to generate B_ik's for FockExchange
         call build_B_cache()
@@ -344,10 +361,19 @@ else ! Use oepvnl
 #ifdef MPI
       call MPI_ALLREDUCE(MPI_IN_PLACE, vxnl , nstsv*nstsv*nkpt, MPI_DOUBLE_COMPLEX,  MPI_SUM, MPI_COMM_WORLD, ierr)
 #endif
-
+    call release_vcoulradial
+    call release_radial_products
+    call release_radial
+    
 
     deallocate(vxpsiir)
     deallocate(vxpsimt)
+!    deallocate(gntyyy)
+!    deallocate(gntyyyT)
+    deallocate(gntlyy)
+    deallocate(gntyyl)
+    deallocate(gntyly)
+
 
     if (rank==0) write(*,*) '-----------------'
 
