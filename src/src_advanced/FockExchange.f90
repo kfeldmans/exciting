@@ -672,7 +672,8 @@ endif
                time_critical=time_critical+td-tc
 !write(*,*) ist2,ist3               
             End Do ! ist2
-!$OMP END DO NOWAIT
+!!$OMP END DO NOWAIT
+!$OMP END DO
          End Do ! ist3
 
 
