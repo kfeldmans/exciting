@@ -110,7 +110,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Allocate (sfacgq(ngvec, natmtot))
       Allocate (wfcr1(ntpll, nrcmtmax))
       Allocate (zvcltp(ntpll, nrcmtmax))
-      Allocate (zfmt(lmmaxvr, nrcmtmax),zfmt0(lmmaxvr, nrcmtmax))
+!      Allocate (zfmt(lmmaxvr, nrcmtmax),zfmt0(lmmaxvr, nrcmtmax))
       !Allocate (zvclmt(lmmaxvr, nrcmtmax, natmtot, nstsv)) !dealoc
       Allocate (qmtlm(lmmaxvr,natmtot,nomax))
       Allocate (vxpbtot(maxpbf2,lmmaxvr,natmtot,nstsv))
