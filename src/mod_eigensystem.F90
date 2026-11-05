@@ -90,6 +90,7 @@ Module mod_eigensystem
 ! Wave functions in different representations
       Type WFType
     complex(8), allocatable :: mt(:,:,:)      !! coefficients of MT functions
+    complex(8), allocatable :: mtordered(:,:,:) !! coefficients of MT functions ordered wrt l
     complex(8), allocatable :: mtrlm(:,:,:,:) !! expansion in spherical harmonics
     complex(8), allocatable :: mtmesh(:,:,:,:)!! values on a real-space mesh
     complex(8), allocatable :: gk(:,:)        !! coefficients of PWs
@@ -1519,5 +1520,57 @@ endif
       enddo
  
       end subroutine prodshrs
+     subroutine prodshrs2(zfun1,zfun2)
+      use modinput
+      use mod_APW_LO
+      use mod_atoms
+      use mod_muffin_tin
+      use mod_eigenvalue_occupancy
+      use constants, only : zzero, zone
+      use mod_SHT
+      use mod_Gvector, only : ngrtot
+ ! !USES:
+ ! !DESCRIPTION:
+ ! Calculates a product of two complex functions given in a muffin tin.
+ ! The first and the second function are given in spherical harmonics and on a spherical grid, respectively.
+ ! The output is produced in spherical harmonics.
+ ! !REVISION HISTORY:
+ !   Created 2024 (Andris)
+ !EOP
+ !BOC
+      implicit none
+      complex(8), intent(inout) :: zfun1(lmmaxvr,nrmtmax,natmtot)
+      complex(8), intent(in) :: zfun2(ntpll,nrmtmax,natmtot)
+
+
+
+!     integer, intent(in) :: ist1,ist2
+!     type (WFType) :: wf1,wf2,prod
+      integer :: is,ia,ias
+      integer :: ir,lm
+      integer :: blkstart,chunksize,iroffset
+      integer, parameter :: blksize=64
+      complex(8) :: mtmesh(ntpll,blksize) 
+      
+      do is=1,nspecies
+        do ia=1,natoms(is)
+          ias=idxas(ia,is)
+! transform function zfun1 into the real space
+          chunksize=blksize
+          do iroffset=1,nrmt(is),blksize
+            if (iroffset+blksize-1.gt.nrmt(is)) chunksize=nrmt(is)+1-iroffset
+
+            Call zgemm ('N', 'N', ntpll, chunksize, lmmaxvr, zone, zbshthf, ntpll, zfun1(1,iroffset,ias), lmmaxvr, zzero, mtmesh, ntpll)
+            mtmesh(:,1:chunksize)=mtmesh(:,1:chunksize)*zfun2(:,iroffset:iroffset+chunksize-1,ias)
+            Call zgemm ('N', 'N', lmmaxvr, chunksize, ntpll, zone, zfshthf, lmmaxvr, mtmesh, ntpll, zzero, zfun1(1,iroffset,ias) , lmmaxvr)
+
+          enddo
+
+! calculate the product zfun1*zfun2
+! transform back to spherical harmonics          
+        enddo
+      enddo
+ 
+      end subroutine prodshrs2
 
 end module mod_eigensystem
