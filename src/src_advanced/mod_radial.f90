@@ -726,7 +726,7 @@ endif
 
    real(8) :: norm, dotp
    real(8) :: ta,tb
- 
+   real(8) :: t0, t_ovl, t_eig, t_basis, t_pool, t1
    real(8), parameter :: usefulness_thr=1d-6
    integer :: maxuseful,nuseful
 
@@ -766,6 +766,9 @@ endif
    npbf2=0
    maxuseful=0
    
+
+   !Initialise component timers
+   t_ovl=0.0d0; t_basis=0.0d0; t_eig=0.0d0; t_pool=0.0d0
    do is=1, nspecies
      r2(1:nrmt(is))=spr(1:nrmt(is),is)*spr(1:nrmt(is),is)
      do ia=1,natoms(is)   
@@ -780,7 +783,7 @@ endif
 !         write(*,*) lrad(irad,is)
 !       enddo
 !       read(*,*) 
-
+      call timesec(t0)
        do jrad=1,nradial(is)
          do irad=1,nradial2(ias)
 
@@ -800,6 +803,7 @@ endif
 !          enddo
          enddo
        enddo
+       call timesec(t1); t_pool=t_pool + t1 - t0; t0 = t1
 !       write(*,*) "ias=",ias
 !       do l=0,lmax
 !         write(*,*) "l, npbf(l): ",l,npbf(l,ias)
@@ -812,6 +816,7 @@ endif
              overlap(jpbf,ipbf)=overlap(ipbf,jpbf)
            enddo
          enddo
+         call timesec(t1); t_ovl = t_ovl + t1 - t0; t0 = t1
 !         write(*,*) ias,npbf2(0,ias)
          call dsyevd("V","U",npbf2(0,ias),overlap,maxpbf2,eval,work,lwork,iwork,liwork,info)
          if (info.ne.0) then
@@ -819,6 +824,7 @@ endif
            write(*,*) "terminating now"
            stop
          endif
+         call timesec(t1); t_eig = t_eig + t1 - t0; t0 = t1
 !         ipbf
 !         write(*,*) '---------------------------'
 !         do ipbf=1,npbf2(0,ias)
@@ -858,7 +864,7 @@ endif
            norm=sqrt(norm)
            pool(1:nrmt(is),ipbf,0)=useful(1:nrmt(is),ipbf)/norm
          enddo
-
+call timesec(t1); t_basis = t_basis + t1 - t0
 !orthogonality test
          if (.false.) then
            do jpbf=1,nuseful
@@ -923,6 +929,12 @@ endif
    deallocate(pool)
    call timesec(tb)
    write(*,*) "init_productbasis:",tb-ta
+   write(*,*) "pb_pool: ", t_pool
+   write(*,*) "pb_ovl: ", t_ovl
+   write(*,*) "pb_eig: ", t_eig
+   write(*,*) "pb_basis: ", t_basis
+   write(*,*) "pb_remainder: ", tb-ta-t_pool-t_ovl-t_eig-t_basis
+
 !   stop
    end subroutine init_productbasis_v3
 
