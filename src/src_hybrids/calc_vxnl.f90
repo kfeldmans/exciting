@@ -44,8 +44,6 @@ subroutine calc_vxnl()
     integer :: lcore
     real(8) ,allocatable :: psi_core(:),vxpsi_core(:)
     real(8) :: t1
-    integer :: io, ilo, irad    ! WP2 temporary check
-    real(8) :: wp2diff          ! WP2 temporary check
 
     call cpu_time(tstart)
 
@@ -321,31 +319,16 @@ else ! Use oepvnl
         call init_uproducts_v3
         fock_tables_built = .true.
       else
-        ! WP2 temporary check: radial functions now vs. the copy in radial(:,:,:)
-        ! taken by init_radial when the tables were built (same loop order)
-        wp2diff = 0d0
-        do is = 1, nspecies
-          do ia = 1, natoms(is)
-            ias = idxas(ia,is)
-            irad = 0
-            do l = 0, input%groundstate%lmaxapw
-              do io = 1, apword(l,is)
-                irad = irad+1
-                wp2diff = max(wp2diff, maxval(abs(apwfr(1:nrmt(is),1,io,l,ias) &
-                                                - radial(1:nrmt(is),irad,ias))))
-              end do
-              do ilo = 1, nlorb(is)
-                if (lorbl(ilo,is) == l) then
-                  irad = irad+1
-                  wp2diff = max(wp2diff, maxval(abs(lofr(1:nrmt(is),1,ilo,ias) &
-                                                  - radial(1:nrmt(is),irad,ias))))
-                end if
-              end do
-            end do
-          end do
-        end do
-        if (rank==0) write(*,'(a,es10.2,a,es24.16)') ' WP2 check: max|u_now - u_built| =', &
-          wp2diff, '   sum|radial| =', sum(abs(radial))
+        ! the reused tables are valid only if the radial functions are unchanged
+        t1 = radial_change()
+        if (t1 /= 0d0) then
+          write(*,*)
+          write(*,'("Error(calc_vxnl): radial functions changed since the product-basis")')
+          write(*,'(" tables were built, but updateRadial is false.")')
+          write(*,'(" max|u_now - u_built| = ", es10.2)') t1
+          write(*,*)
+          stop
+        end if
       end if
 
 !      call release_radial

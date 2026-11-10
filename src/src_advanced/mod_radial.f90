@@ -135,6 +135,42 @@ Contains
 
    end subroutine release_radial
 
+! max|u_now - u_built| between the current apwfr/lofr (function values) and the copy
+! that init_radial took into radial(:,:,:); same loop order as init_radial.
+! The copy is a plain assignment, so the result is exactly 0 if they are unchanged.
+   real(8) function radial_change()
+   use modinput
+   use mod_APW_LO, only: apwfr, lofr, apword, nlorb, lorbl
+   use mod_atoms, only: idxas, nspecies, natoms
+   use mod_muffin_tin, only: nrmt
+   implicit none
+
+   integer :: is, ia, ias, l, io, ilo, irad
+
+   radial_change = 0d0
+   do is = 1, nspecies
+     do ia = 1, natoms(is)
+       ias = idxas(ia,is)
+       irad = 0
+       do l = 0, input%groundstate%lmaxapw
+         do io = 1, apword(l,is)
+           irad = irad+1
+           radial_change = max(radial_change, maxval(abs(apwfr(1:nrmt(is),1,io,l,ias) &
+                                                        - radial(1:nrmt(is),irad,ias))))
+         enddo
+         do ilo = 1, nlorb(is)
+           if (lorbl(ilo,is) == l) then
+             irad = irad+1
+             radial_change = max(radial_change, maxval(abs(lofr(1:nrmt(is),1,ilo,ias) &
+                                                          - radial(1:nrmt(is),irad,ias))))
+           endif
+         enddo
+       enddo
+     enddo
+   enddo
+
+   end function radial_change
+
 ! releases every table built by the init_* routines of this module
    subroutine release_fock_tables
    implicit none
