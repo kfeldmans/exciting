@@ -44,6 +44,8 @@ subroutine calc_vxnl()
     integer :: lcore
     real(8) ,allocatable :: psi_core(:),vxpsi_core(:)
     real(8) :: t1
+    integer :: io, ilo, irad    ! WP2 temporary check
+    real(8) :: wp2diff          ! WP2 temporary check
 
     call cpu_time(tstart)
 
@@ -300,18 +302,51 @@ else ! Use oepvnl
       call kintw()
       deallocate(evalfv)
   
-      call gengntyyy
-      call init_radial
-!      call init_radial_products
-!      call init_vcoulradial
-      call init_productbasis
-      call init_uproducts
-      call init_pbfpotential
-      call init_radial_v2
-!      call init_productbasis_v2
-!      call init_uproducts_v2
-      call init_productbasis_v3
-      call init_uproducts_v3
+      ! The tables depend only on the radial functions (apwfr, lofr), the radial grids
+      ! and weights, and input parameters. The radial functions change during the
+      ! hybrid stage only with updateRadial, so otherwise they are built once per run
+      ! and released in hybrids.
+      if (.not. allocated(gntlyy)) call gengntyyy
+      if (.not. fock_tables_built .or. input%groundstate%Hybrid%updateRadial) then
+        call init_radial
+!        call init_radial_products
+!        call init_vcoulradial
+        call init_productbasis
+        call init_uproducts
+        call init_pbfpotential
+        call init_radial_v2
+!        call init_productbasis_v2
+!        call init_uproducts_v2
+        call init_productbasis_v3
+        call init_uproducts_v3
+        fock_tables_built = .true.
+      else
+        ! WP2 temporary check: radial functions now vs. the copy in radial(:,:,:)
+        ! taken by init_radial when the tables were built (same loop order)
+        wp2diff = 0d0
+        do is = 1, nspecies
+          do ia = 1, natoms(is)
+            ias = idxas(ia,is)
+            irad = 0
+            do l = 0, input%groundstate%lmaxapw
+              do io = 1, apword(l,is)
+                irad = irad+1
+                wp2diff = max(wp2diff, maxval(abs(apwfr(1:nrmt(is),1,io,l,ias) &
+                                                - radial(1:nrmt(is),irad,ias))))
+              end do
+              do ilo = 1, nlorb(is)
+                if (lorbl(ilo,is) == l) then
+                  irad = irad+1
+                  wp2diff = max(wp2diff, maxval(abs(lofr(1:nrmt(is),1,ilo,ias) &
+                                                  - radial(1:nrmt(is),irad,ias))))
+                end if
+              end do
+            end do
+          end do
+        end do
+        if (rank==0) write(*,'(a,es10.2,a,es24.16)') ' WP2 check: max|u_now - u_built| =', &
+          wp2diff, '   sum|radial| =', sum(abs(radial))
+      end if
 
 !      call release_radial
 !      stop
@@ -361,18 +396,14 @@ else ! Use oepvnl
 #ifdef MPI
       call MPI_ALLREDUCE(MPI_IN_PLACE, vxnl , nstsv*nstsv*nkpt, MPI_DOUBLE_COMPLEX,  MPI_SUM, MPI_COMM_WORLD, ierr)
 #endif
-    call release_vcoulradial
-    call release_radial_products
-    call release_radial
-    
+    ! tables are kept for the next hybrid iteration unless the radial functions change
+    if (input%groundstate%Hybrid%updateRadial) call release_fock_tables
 
     deallocate(vxpsiir)
     deallocate(vxpsimt)
 !    deallocate(gntyyy)
 !    deallocate(gntyyyT)
-    deallocate(gntlyy)
-    deallocate(gntyyl)
-    deallocate(gntyly)
+!    gntlyy, gntyyl, gntyly are kept as well and released in hybrids
 
 
     if (rank==0) write(*,*) '-----------------'

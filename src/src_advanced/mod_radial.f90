@@ -35,7 +35,11 @@ Module mod_radial
 
    real(8), allocatable :: pbfpotential(:,:,:,:) ! radial Coulomb potential corresponding to productbasis
    real(8), allocatable :: pbfmultipoles(:,:,:) ! multipoles corresponding to productbasis
-   
+
+! .true. once calc_vxnl has built the tables above for the current radial functions;
+! reset by release_fock_tables (end of hybrids, or every call when updateRadial is set)
+   logical :: fock_tables_built = .false.
+
 
 Contains
 
@@ -130,6 +134,24 @@ Contains
      if (allocated(nlradial)) deallocate(nlradial)
 
    end subroutine release_radial
+
+! releases every table built by the init_* routines of this module
+   subroutine release_fock_tables
+   implicit none
+
+     call release_radial
+     call release_radial_products
+     call release_vcoulradial
+     call release_productbasis
+     call release_uproducts
+     call release_pbfpotential
+     call release_radial_v2
+     call release_productbasis_v2
+     call release_uproducts_v2
+     call release_uproducts_v3
+     fock_tables_built = .false.
+
+   end subroutine release_fock_tables
 
    subroutine init_radial_products
    use modinput

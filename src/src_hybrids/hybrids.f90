@@ -14,6 +14,7 @@ Subroutine hybrids
     use lo_recommendation1
     use mod_potential_and_density, only: veffmt
   use mod_Feldmans, only: initialise_mod_Feld, finalise_mod_Feld
+  use mod_radial, only: release_fock_tables
 ! !DESCRIPTION:
 !   Main routine for Hartree-Fock based hybrid functionals.
 !
@@ -550,6 +551,12 @@ Subroutine hybrids
   !!!MODIFICATIONS BY FELDMANS
 
   call finalise_mod_Feld()
+
+  ! run-constant tables of calc_vxnl (built once per run)
+  call release_fock_tables()
+  if (allocated(gntlyy)) deallocate(gntlyy)
+  if (allocated(gntyyl)) deallocate(gntyyl)
+  if (allocated(gntyly)) deallocate(gntyly)
 
   !!!END MODIFICATIONS BY FELDMANS
     call exit_hybrids
