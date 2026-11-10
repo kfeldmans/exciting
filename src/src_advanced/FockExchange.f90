@@ -48,6 +48,8 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Complex (8) :: rhoG0,potG0
   Real(8) :: time_coul, tc, td, time_fft, time_prod, time_rs, time_misc, time_critical, time_pw, time_qlm, time_omp
   real(dp) :: tf1, tf2
+! phase timers of coulomb_potential3 (see its header for the 8 entries), and genWF timer
+  real(dp) :: time_cp3(8), tg0, tg1
 ! automatic arrays
       Real (8) :: zn (nspecies)
       Complex (8) sfacgq0 (natmtot)
@@ -142,11 +144,14 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       ! End of B_ik_vec generation
 
       ik  = kset%ikp2ik(ikp) ! 1d reduced index -> 1d non-reduced k-point index
+      call timesec(tg0)
       call genWF(ik,wf1)
       
       call orderWF(wf1)
       call genWFinMT(wf1)
       call genWFonMesh(wf1)
+      call timesec(tg1)
+      if (print_times) write(*,*) 'genWF1 :', tg1-tg0
 
 !   call timesec(ta)
 !   !call psi_sphr_SVDb_v3(ik,wf1,B_ik)
@@ -356,6 +361,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          time_critical=0d0
          time_pw=0d0
     time_omp = 0d0
+    time_cp3 = 0d0
     !write(*,*)"B_ik is allocated:", allocated(B_ik)
     !write(*,*)"B_jk is allocated:", allocated(B_jk)
     Allocate (q_nnLM_is(nstfv,nomax,lmmaxvr,natmtot))
@@ -369,7 +375,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
     call timesec(tb) ! Reset time counter for omp_loop
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3)
       !ist2 
 
          !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -381,6 +387,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          time_critical=0d0
          time_pw=0d0
     time_qlm = 0d0
+    time_cp3 = 0d0
          call WFInit(prod)
          call WFInit(pot)
 
@@ -512,7 +519,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                   & jlgqr, ylmgq, sfacgq, prod%mtrlm(:,:,:,1), &
                   & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v,qmtlm(:,:,ist2), &
                   & cutoff=cutoff, hybrid_in=.true.,&
-                  & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1))
+                  & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1),times=time_cp3)
 
 !                  if (input%groundstate%hybrid%erfcapprox.ne."PW")then 
 !                     pot%mtrlm(:,:,:,1)=potmt0
@@ -716,6 +723,14 @@ if (print_times) then
    write(*,*) '  time_critical :', time_critical
    write(*,*) '  time_pw :',time_pw
       write(*,*) '  time_qlm :', time_qlm
+   write(*,*) '  cp3_total :', time_cp3(8)
+   write(*,*) '  cp3_fft_rho :', time_cp3(1)
+   write(*,*) '  cp3_pseudo_fft :', time_cp3(2)
+   write(*,*) '  cp3_pseudo_add :', time_cp3(3)
+   write(*,*) '  cp3_poisson :', time_cp3(4)
+   write(*,*) '  cp3_fft_pot :', time_cp3(5)
+   write(*,*) '  cp3_surf :', time_cp3(6)
+   write(*,*) '  cp3_match :', time_cp3(7)
 endif
       End Do ! non-reduced k-point set
 !stop

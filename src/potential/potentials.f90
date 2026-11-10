@@ -670,7 +670,7 @@ end subroutine coulomb_potential2
 
 !-----
   subroutine coulomb_potential3(qlmir_in, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, qmtlm, cutoff,&
-    & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat)
+    & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat,times)
 use modsurf, only: surf_pot
 use constants, only: y00,zzero
 use modinput
@@ -724,6 +724,11 @@ real(dp), allocatable :: vdplmt(:,:,:), vdplir(:)
 complex(dp), allocatable :: qlm(:,:), qlmir(:,:), zrhoig(:)
 logical, optional, intent(in) :: rpseudo_in
 complex(dp), optional, intent(in) :: rpseudomat(:,:,:)
+!> optional phase timers, accumulated in seconds (size 8): 1 FFT of the density and reordering,
+!> 2 pseudocharge FFTs and reordering, 3 pseudocharge real-space sum, 4 Poisson in G space,
+!> 5 FFT of the potential and reordering, 6 surface potential, 7 boundary matching, 8 whole routine
+real(dp), optional, intent(inout) :: times(:)
+real(dp) :: tph0, tph1, tentry, tps(2)
 
 logical :: yukawa
 logical :: hybrid, rpseudo
@@ -737,6 +742,10 @@ real(dp) :: t1, ta, tb,tc,td,te,tf
 complex(dp), allocatable :: zrhoig_sort(:)
 real(dp) :: maxrhog
 integer :: ngp2
+
+call timesec(tentry)
+tph0 = tentry
+tps = 0._dp
 
 if (present(hybrid_in)) then 
 hybrid=hybrid_in
@@ -821,6 +830,9 @@ call timesec(tb)
 
 ! take difference of muffin-tin and interstitial multipole moments
 !qlm = qlm - qlmir
+call timesec(tph1)
+if (present(times)) times(1) = times(1) + tph1 - tph0
+tph0 = tph1
 qlm = qlm - qlmir_in
 
 
@@ -833,7 +845,7 @@ if(rpseudo)then
     ifg = igfft (ig)
     zrhoig(ifg)=zrhoig_sort(ig)
   enddo
-  call pseudocharge_rspace_new(input%groundstate%lmaxvr,qlm,rpseudomat,zrhoig)
+  call pseudocharge_rspace_new(input%groundstate%lmaxvr,qlm,rpseudomat,zrhoig,tps)
   do ig=1, ngp
     ifg = igfft (ig)
     zrhoig_sort(ig)=zrhoig(ifg)
@@ -852,6 +864,12 @@ else
 endif
 call timesec(tb)
 !write(*,*)"pseudocharge:",tb-ta
+call timesec(tph1)
+if (present(times)) then
+  times(2) = times(2) + (tph1 - tph0) - tps(2)
+  times(3) = times(3) + tps(2)
+end if
+tph0 = tph1
 
 call timesec(ta)
 if (yukawa) then
@@ -861,6 +879,9 @@ else
 endif
 call timesec(tb)
 !write(*,*)"poisson_ir:", tb-ta
+call timesec(tph1)
+if (present(times)) times(4) = times(4) + tph1 - tph0
+tph0 = tph1
   ! zrhoig_sort(1:ngp)=zvclir(1:ngp)
   ! zvclir(:)=zzero
   ! do ig=1, ngp   
@@ -880,9 +901,18 @@ if (input%groundstate%hybrid%rsurf) then
   enddo
   call zfftifc( 3, ngrid, 1, zvclir)
   
+call timesec(tph1)
+if (present(times)) times(5) = times(5) + tph1 - tph0
+tph0 = tph1
   call surf_pot(input%groundstate%lmaxvr,zvclir,igfft,qvec,qlmir)
+call timesec(tph1)
+if (present(times)) times(6) = times(6) + tph1 - tph0
+tph0 = tph1
 else
   call surface_ir3( input%groundstate%lmaxvr, ngp, jlgpr, ylmgp, sfacgp, zvclir, qlmir)
+call timesec(tph1)
+if (present(times)) times(6) = times(6) + tph1 - tph0
+tph0 = tph1
 ! Fourier transform interstitial potential to real space
   zrhoig_sort(1:ngp)=zvclir(1:ngp)
   zvclir(:)=zzero
@@ -891,6 +921,9 @@ else
     zvclir(ifg)=zrhoig_sort(ig)
   enddo
   call zfftifc( 3, ngrid, 1, zvclir)
+call timesec(tph1)
+if (present(times)) times(5) = times(5) + tph1 - tph0
+tph0 = tph1
 endif
 
 
@@ -917,10 +950,15 @@ end do
 call timesec(tb)
 
 !write(*,*)"match_bound_mt",tb-ta
+call timesec(tph1)
+if (present(times)) times(7) = times(7) + tph1 - tph0
+tph0 = tph1
 
 
 
 deallocate( zrhoig, qlm, qlmir,zrhoig_sort)
+call timesec(tph1)
+if (present(times)) times(8) = times(8) + tph1 - tentry
 
 if(.false.)then
 open(11,file='mt_rez.dat',status='replace')

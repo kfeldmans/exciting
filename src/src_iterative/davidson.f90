@@ -53,6 +53,11 @@ Subroutine davidson (system, nst, evecfv, evalfv,ik)
       complex(8) :: zsum
  
       real(8) :: oldsum,newsum,time1,time2
+! phase timers (seconds, this call) and their bookkeeping
+      real(8) :: tq0,tq1
+      real(8) :: tdav_setup,tdav_lo,tdav_ortho,tdav_hapw,tdav_ace,tdav_inner,tdav_diag,tdav_ritz
+      logical :: dav_warm
+      character(4) :: dav_pfx
       integer :: ndiv,nblocks,calls,npw,is,ia,ias,nsize,nadd,ilo,m,if1,nloall,n_local,npw_local,nusedsingular,l
       complex(8), external :: zdotc
       complex(8), allocatable :: zfftcf(:),zfftveff(:),zfftmeff(:)
@@ -61,6 +66,15 @@ Subroutine davidson (system, nst, evecfv, evalfv,ik)
 
       !if ((input%groundstate%outputlevel.eq."high").and.(mpiglobal%rank.eq.0))  write(*,*) 'ik=',ik
       call timesec(tsa)
+      tdav_setup=0d0
+      tdav_lo=0d0
+      tdav_ortho=0d0
+      tdav_hapw=0d0
+      tdav_ace=0d0
+      tdav_inner=0d0
+      tdav_diag=0d0
+      tdav_ritz=0d0
+      dav_warm=.false.
 
 ! Initialise block sizes
       npw=ngk(1,ik)
@@ -193,6 +207,8 @@ Subroutine davidson (system, nst, evecfv, evalfv,ik)
 
       nusedsingular=nsingular 
       ndiv=nst
+      call timesec(tq1)
+      tdav_setup=tq1-tsa
       nblocks=12 ! Expand the subspace up to 12 times
       calls=0
       allocate(rd(nblocks*ndiv+nusedsingular+nloall))
@@ -221,22 +237,30 @@ Subroutine davidson (system, nst, evecfv, evalfv,ik)
        enddo
        nsize=nsize+nadd
 
+       call timesec(tq0)
        call HloSlo(n_local,npw_local,nsize,system,trialvec,Hx,Sx)
 ! The following bit will be necessary for supporting ACE
        if (allocated(pace).and.(.not.associated(system%hamilton%za))) then
         call pacelo(n_local,npw_local,nsize,nstsv,input%groundstate%hybrid%excoeff,pace(:,:,ik),trialvec ,Hx )
        endif
 
+       call timesec(tq1)
+       tdav_lo=tdav_lo+tq1-tq0
+       tq0=tq1
 ! -> 2. singular components
        if (nusedsingular.ne.0) then
          trialvec(1:npw_local,nsize+1:nsize+nusedsingular)=singular(1:npw_local,1:nusedsingular,ik)
          nsize=nsize+nusedsingular
          call GSortho(n_local,0,nsize-nloall,trialvec(:,nloall+1:))
+         call timesec(tq1)
+         tdav_ortho=tdav_ortho+tq1-tq0
+         tq0=tq1
        endif
 ! -> 3. initial guess for wavefunctions
        if (dble(sum(evecfv)).ne.0d0) then ! check whether the old eigenvectors exist
 !       wavefunctions from previous scf iterations
          trialvec(1:npw,nsize+1:nsize+nst)=evecfv(1:npw, 1:nst)
+         dav_warm=.true.
          nsize=nsize+nst
        else
 !       or just a guess
@@ -263,14 +287,24 @@ call timesec(time1)
       BlockH=zzero
       BlockS=zzero
 
+      call timesec(tq0)
       call GSortho(n_local,nsize-ndiv-nloall,nsize-nloall,trialvec(:,nloall+1:))
+      call timesec(tq1)
+      tdav_ortho=tdav_ortho+tq1-tq0
+      tq0=tq1
       call HapwSapw(n_local,npw,nsize-nloall,system,fftmap,zfftcf,zfftveff,zfftmeff,trialvec(:,nloall+1:nsize),Hx(:,nloall+1:nsize),Sx(:,nloall+1:nsize),.true.)
 
 ! The following bit will be necessary for supporting ACE
+      call timesec(tq1)
+      tdav_hapw=tdav_hapw+tq1-tq0
+      tq0=tq1
       if (allocated(pace).and.(.not.associated(system%hamilton%za))) then
         call paceapw(n_local,npw,nsize-nloall,nstsv,input%groundstate%hybrid%excoeff,pace(:,:,ik),trialvec(1:n_local,nloall+1:nsize) ,Hx(1:n_local,nloall+1:nsize))
       endif
 
+      call timesec(tq1)
+      tdav_ace=tdav_ace+tq1-tq0
+      tq0=tq1
       call innerproduct(n_local,nsize,nsize,trialvec,Hx(:,1:nsize),blockH(:,1:nsize))
       call innerproduct(n_local,nsize,nsize,trialvec,Sx(:,1:nsize),blockS(:,1:nsize))
       extraH(1:nsize,1:nsize)=BlockH(1:nsize,1:nsize)
@@ -279,7 +313,13 @@ call timesec(time1)
 ! The initial subspace is set up
 ! Now diagonalise and get the current estimate of the eigenvectors 
 
+      call timesec(tq1)
+      tdav_inner=tdav_inner+tq1-tq0
+      tq0=tq1
       call diagH2(nsize,blockH,blockS,rd,info)
+      call timesec(tq1)
+      tdav_diag=tdav_diag+tq1-tq0
+      tq0=tq1
       call pickritzvectors(nsize,ndiv,rd,nstart)
       call getritzvectors(n_local,nsize,ndiv,trialvec,blockH,ritzvec,nstart,npw_local)
 
@@ -301,6 +341,9 @@ call timesec(time1)
         maxresid=max(residlen(i),maxresid)
       enddo
       deallocate(zvec)
+      call timesec(tq1)
+      tdav_ritz=tdav_ritz+tq1-tq0
+      tq0=tq1
       deallocate(BlockS,BlockH)
 
       !if ((input%groundstate%outputlevel.eq."high").and.(mpiglobal%rank.eq.0)) write(*,*) ndiv,maxresid,sum(rd(nstart:nstart+ndiv-1)),calls+1
@@ -336,13 +379,23 @@ call timesec(time2)
           calls=calls+1
           allocate(BlockS(nsize,nsize))
           allocate(BlockH(nsize,nsize))
+          call timesec(tq0)
           call GSortho(n_local,nsize-nadd-nloall,nsize-nloall,trialvec(:,nloall+1:))
+          call timesec(tq1)
+          tdav_ortho=tdav_ortho+tq1-tq0
+          tq0=tq1
           call HapwSapw(n_local,npw,nadd,system,fftmap,zfftcf,zfftveff,zfftmeff,trialvec(:,nsize-nadd+1:nsize),Hx(:,nsize-nadd+1:nsize),Sx(:,nsize-nadd+1:nsize),.true.)
 ! The following bit will be necessary for supporting ACE 
+          call timesec(tq1)
+          tdav_hapw=tdav_hapw+tq1-tq0
+          tq0=tq1
           if (allocated(pace).and.(.not.associated(system%hamilton%za))) then
             call paceapw(n_local,npw,nadd,nstsv,input%groundstate%hybrid%excoeff,pace(:,:,ik),trialvec(1:n_local,nsize-nadd+1:nsize) ,Hx(1:n_local,nsize-nadd+1:nsize))
           endif
 
+          call timesec(tq1)
+          tdav_ace=tdav_ace+tq1-tq0
+          tq0=tq1
           call innerproduct(n_local,nsize,nsize,trialvec,Hx,blockH)
           call innerproduct(n_local,nsize,nsize,trialvec,Sx,blockS)
 
@@ -353,7 +406,13 @@ call timesec(time2)
           blockS(1:nsize-nadd,1:nsize-nadd)=extraS(1:nsize-nadd,1:nsize-nadd)
           extraS(1:nsize,1:nsize)=BlockS(1:nsize,1:nsize)
 
+          call timesec(tq1)
+          tdav_inner=tdav_inner+tq1-tq0
+          tq0=tq1
           call diagH2(nsize,blockH,blockS,rd,info)
+          call timesec(tq1)
+          tdav_diag=tdav_diag+tq1-tq0
+          tq0=tq1
 
           if (info.eq.0) then
             call pickritzvectors(nsize,ndiv,rd,nstart)
@@ -384,6 +443,9 @@ call timesec(time2)
             write(*,*) 'info=',info
             call terminate_mpi_env(mpiglobal) 
           endif
+          call timesec(tq1)
+          tdav_ritz=tdav_ritz+tq1-tq0
+          tq0=tq1
           deallocate(BlockS,BlockH)
         endif
 
@@ -409,6 +471,29 @@ call timesec(time2)
       call timesec(tsb)
 
       timefv=timefv+tsb-tsa
+! One block of timer lines per call, in the 'label : value' form that bench sums.
+! Prefix dav_ = hybrid stage (task 7), dpbe = PBE stage. Counts are printed as reals.
+      if (mpiglobal%rank.eq.0) then
+        if (task.eq.7) then
+          dav_pfx='dav_'
+        else
+          dav_pfx='dpbe'
+        endif
+        write(*,*) dav_pfx//'total :', tsb-tsa
+        write(*,*) dav_pfx//'setup :', tdav_setup
+        write(*,*) dav_pfx//'lo :', tdav_lo
+        write(*,*) dav_pfx//'ortho :', tdav_ortho
+        write(*,*) dav_pfx//'hapw :', tdav_hapw
+        write(*,*) dav_pfx//'ace :', tdav_ace
+        write(*,*) dav_pfx//'inner :', tdav_inner
+        write(*,*) dav_pfx//'diag :', tdav_diag
+        write(*,*) dav_pfx//'ritz :', tdav_ritz
+        write(*,*) dav_pfx//'other :', tsb-tsa-tdav_setup-tdav_lo-tdav_ortho-tdav_hapw-tdav_ace-tdav_inner-tdav_diag-tdav_ritz
+        write(*,*) dav_pfx//'blocks :', dble(calls)
+        write(*,*) dav_pfx//'nsize :', dble(nsize)
+        write(*,*) dav_pfx//'nlo :', dble(nloall)
+        write(*,*) dav_pfx//'warm :', merge(1d0,0d0,dav_warm)
+      endif
       !if ((input%groundstate%outputlevel.eq."high").and.(mpiglobal%rank.eq.0)) then
       !  write(*,*) '***** HapwSapw calls=',calls
       !  write(*,*) 'iterations',tsb-tsa

@@ -1531,7 +1531,7 @@ End Do
       
   end subroutine pseudocharge_rspace_matrix
 
-    subroutine pseudocharge_rspace_new(lmax,qlm,rpseudomat,zvclir)
+    subroutine pseudocharge_rspace_new(lmax,qlm,rpseudomat,zvclir,times)
       use modrspace, only: rgrid_mt_map, rgrid_nmtpoints
       use mod_atoms, only: nspecies, natoms, natmtot,idxas
       use mod_Gvector, only: ngrtot, ngrid
@@ -1545,6 +1545,8 @@ End Do
       complex (8) :: zt1
       integer :: is,ia,ias,l,m,lm,ig,igr,lmmax
       real(8) :: ta,tb,tc,td
+      !> optional timers, accumulated in seconds: 1 the two FFTs, 2 the real-space sum
+      real(8), optional, intent(inout) :: times(2)
 
       ! external functions
       Complex (8) :: zdotu
@@ -1575,6 +1577,10 @@ End Do
       call zfftifc( 3, ngrid, -1, zvclir)
       call timesec(td)
       !write(*,*)"fft 2x:",td-tc+tb-ta
+      if (present(times)) then
+        times(1)=times(1)+(tb-ta)+(td-tc)
+        times(2)=times(2)+(tc-tb)
+      endif
       !write(*,*)"rekinasana :",tc-tb
 
   end subroutine pseudocharge_rspace_new
