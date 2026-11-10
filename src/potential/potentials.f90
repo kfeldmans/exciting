@@ -670,7 +670,7 @@ end subroutine coulomb_potential2
 
 !-----
   subroutine coulomb_potential3(qlmir_in, nr, r, ngp, gpc, igp0, jlgpr, ylmgp, sfacgp, zrhomt, zrhoir, zvclmt, zvclir, zrho0,qvec, qmtlm, cutoff,&
-    & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat,times)
+    & hybrid_in, yukawa_in,zlambda_in,zbessi,zbessk,zilmt,rpseudo_in,rpseudomat,times,vbound)
 use modsurf, only: surf_pot
 use constants, only: y00,zzero
 use modinput
@@ -728,6 +728,11 @@ complex(dp), optional, intent(in) :: rpseudomat(:,:,:)
 !> 2 pseudocharge FFTs and reordering, 3 pseudocharge real-space sum, 4 Poisson in G space,
 !> 5 FFT of the potential and reordering, 6 surface potential, 7 boundary matching, 8 whole routine
 real(dp), optional, intent(inout) :: times(:)
+!> optional output (WP3 step 3.3, Coulomb path only): the surface coefficients of the potential,
+!> vbound(lm,ias) = qlmir after surf_pot / surface_ir3, so that the muffin-tin potential is
+!> vbound(lm,ias) (r/R_ias)^l (match_bound_mt2). When present, the boundary matching is skipped
+!> and zvclmt is not set.
+complex(dp), optional, intent(out) :: vbound(:,:)
 real(dp) :: tph0, tph1, tentry, tps(2)
 
 logical :: yukawa
@@ -937,6 +942,15 @@ call timesec(ta)
 !  write(*,*) dble(qlmir(lm,1))
 !enddo
 
+if (present(vbound)) then
+  if (yukawa .or. present(zbessi)) then
+    write(*,*)
+    write(*,'("Error(coulomb_potential3): vbound is for the Coulomb path only")')
+    write(*,*)
+    stop
+  end if
+  vbound(1:lmmaxvr,1:natmtot) = qlmir(1:lmmaxvr,1:natmtot)
+else
 do is = 1, nspecies
 do ia = 1, natoms(is)
 ias = idxas(ia,is)
@@ -947,6 +961,7 @@ else
 endif
 end do
 end do
+end if
 call timesec(tb)
 
 !write(*,*)"match_bound_mt",tb-ta

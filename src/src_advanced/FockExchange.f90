@@ -12,12 +12,12 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       Use modinput
       Use modgw, only : kqset,Gkqset, kset, nomax, numin, ikvbm, ikcbm, ikvcm, Gset
       Use potentials, only: coulomb_potential2, coulomb_potential3
-      use weinert, only: poisson_mt_yukawa,pseudocharge_rspace_matrix
+      use weinert, only: poisson_mt_yukawa,pseudocharge_rspace_matrix,match_bound_mt2
       use mod_hybrids, only : gmax_pw_method
       USE OMP_LIB
       use mod_radial
       use mod_fock_mt, only: fock_mt_on, fock_mt_selftest, nfmax, nfun, project_mt, &
-                             Tpb2, f_irad, f_lm
+                             Tpb2, f_irad, f_lm, Rb, gnt_mt, l_of_lm
   use precision, only:dp
 
       use poterf
@@ -103,6 +103,16 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       Complex (8), Allocatable :: wpb_old (:, :, :), wtmp (:)
       Integer :: ifn, npb
       Real (8) :: dpb(2)
+! WP3 step 3.3: boundary term from the surface coefficients, without the angular mesh.
+! vbs(LM,ias,m) = v^{n m}_{ias,LM} for the current n = ist3 (shared; column m written by the thread
+! that has pair m); xvb(LM,f') = sum_m vbs(LM,ias,m) C^m(f',ias) (per thread);
+! wbd_new(f,ias,n) = sum_q wkptnr sum_{LM,f'} <Y_lm(f)|Y_LM|Y_l'm'(f')> Rb(irad(f),L,irad(f'),ias) xvb(LM,f');
+! wbd_old = project_mt of the old per-pair prodshrs2 result, summed over m and q (temporary, until 3.5)
+      Complex (8), Allocatable :: vbs (:, :, :), xvb (:, :), wbd_new (:, :, :), wbd_old (:, :, :)
+      Integer, Allocatable :: is_of_ias (:)
+      Integer :: ifn2, igt, lm1, lm3, lmb, irad1, irad2
+      Complex (8) :: zsum
+      Real (8) :: dbd(2), time_vb
   integer :: ik_test,ist3_test,jk_test,ist2_test
 ! external functions
       Complex (8) zfinp, zfmtinp, zfinpir, zfinpmt
@@ -199,6 +209,15 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       if (fock_mt_on) then
         Allocate (wpb_old(max(1,nfmax), natmtot, nstsv))
         wpb_old (:, :, :) = 0.d0
+        Allocate (wbd_new(max(1,nfmax), natmtot, nstsv), wbd_old(max(1,nfmax), natmtot, nstsv))
+        wbd_new (:, :, :) = 0.d0
+        wbd_old (:, :, :) = 0.d0
+        Allocate (is_of_ias(natmtot))
+        Do is = 1, nspecies
+          Do ia = 1, natoms (is)
+            is_of_ias (idxas(ia, is)) = is
+          End Do
+        End Do
       endif
       vnlvv (:, :) = 0.d0
 ! calculate the wavefunctions for all states for the input k-point
@@ -370,6 +389,15 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          endif
 
          !write(*,*)"cutoff", cutoff,"ik, jk",ik,jk,"handleG0",handleG0
+         ! WP3 step 3.3: fock_mt_on implies the Coulomb path (erfcapprox = none, exc0d), so no handleG0
+         if (fock_mt_on .and. handleG0) then
+            write(*,'("Error(FockExchange): fock_mt_on with handleG0")')
+            stop
+         endif
+         if (fock_mt_on) then
+            if (allocated(vbs)) deallocate(vbs)
+            Allocate (vbs(lmmaxvr, natmtot, nomax))
+         endif
 
          vxpbtot=0d0
 
@@ -382,6 +410,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          time_pw=0d0
     time_omp = 0d0
     time_cp3 = 0d0
+    time_vb = 0d0
     !write(*,*)"B_ik is allocated:", allocated(B_ik)
     !write(*,*)"B_jk is allocated:", allocated(B_jk)
     Allocate (q_nnLM_is(nstfv,nomax,lmmaxvr,natmtot))
@@ -395,7 +424,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
     call timesec(tb) ! Reset time counter for omp_loop
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2,wtmp,ifn,npb)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2,wtmp,ifn,npb,xvb,ifn2,igt,lm1,lm3,lmb,irad1,irad2,zsum)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3) REDUCTION(max: time_vb)
       !ist2 
 
          !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -408,6 +437,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          time_pw=0d0
     time_qlm = 0d0
     time_cp3 = 0d0
+    time_vb = 0d0
          call WFInit(prod)
          call WFInit(pot)
 
@@ -426,6 +456,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          Allocate(qlmir_new(lmmaxvr, natmtot))
          allocate(qlmir(lmmaxvr,natmtot))
          Allocate (wtmp(max(1,nfmax)))
+         if (fock_mt_on) Allocate (xvb(lmmaxvr, max(1,nfmax)))
 
          Do ist3 = 1, nstfv
            call timesec(tc)
@@ -536,11 +567,28 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                   potmt0=zzero
                   potir0=zzero
 
+                  if (fock_mt_on) then
+                  ! WP3 step 3.3: surface coefficients into vbs(:,:,ist2); coulomb_potential3 then
+                  ! skips the boundary matching. The old path (comparison, until 3.5) repeats that
+                  ! matching here, the same call as inside coulomb_potential3, so pot%mtrlm is unchanged.
+                  Call coulomb_potential3 (qlmir_new,nrcmt, rcmt, ngvec, gqc, igq0, &
+                  & jlgqr, ylmgq, sfacgq, prod%mtrlm(:,:,:,1), &
+                  & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v,qmtlm(:,:,ist2), &
+                  & cutoff=cutoff, hybrid_in=.true.,&
+                  & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1),times=time_cp3,vbound=vbs(:,:,ist2))
+                  do is = 1, nspecies
+                    do ia = 1, natoms(is)
+                      ias = idxas(ia,is)
+                      call match_bound_mt2(lmaxvr, nrcmt(is), rcmt(:,is), rmt(is), vbs(:,ias,ist2), pot%mtrlm(:,:,ias,1))
+                    enddo
+                  enddo
+                  else
                   Call coulomb_potential3 (qlmir_new,nrcmt, rcmt, ngvec, gqc, igq0, &
                   & jlgqr, ylmgq, sfacgq, prod%mtrlm(:,:,:,1), &
                   & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v,qmtlm(:,:,ist2), &
                   & cutoff=cutoff, hybrid_in=.true.,&
                   & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1),times=time_cp3)
+                  endif
 
 !                  if (input%groundstate%hybrid%erfcapprox.ne."PW")then 
 !                     pot%mtrlm(:,:,:,1)=potmt0
@@ -702,6 +750,35 @@ endif
             End Do ! ist2
 !!$OMP END DO NOWAIT
 !$OMP END DO
+            ! WP3 step 3.3: after the barrier vbs holds all m for this ist3. Per atom one ZGEMM
+            ! X = vbs(:,ias,:) C^T (C = wf2%mtordered, not conjugated: psi_m enters the product as is),
+            ! then the Gaunt and Rb sums. One writer per atom slice of wbd_new.
+            if (fock_mt_on) then
+               call timesec(tc)
+!$OMP DO SCHEDULE(DYNAMIC)
+               do ias = 1, natmtot
+                  is = is_of_ias(ias)
+                  call zgemm('N', 'T', lmmaxvr, nfun(is), nomax, zone, vbs(1,ias,1), lmmaxvr*natmtot, &
+                             wf2%mtordered(1,1,ias), size(wf2%mtordered,1), zzero, xvb, lmmaxvr)
+                  do ifn = 1, nfun(is)
+                     lm1 = f_lm(ifn,is)
+                     irad1 = f_irad(ifn,is)
+                     zsum = zzero
+                     do ifn2 = 1, nfun(is)
+                        lm3 = f_lm(ifn2,is)
+                        irad2 = f_irad(ifn2,is)
+                        do igt = 1, gnt_mt%num(lm1,lm3)
+                           lmb = gnt_mt%lm2(igt,lm1,lm3)
+                           zsum = zsum + gnt_mt%val(igt,lm1,lm3)*Rb(irad1,l_of_lm(lmb),irad2,ias)*xvb(lmb,ifn2)
+                        enddo
+                     enddo
+                     wbd_new(ifn,ias,ist3) = wbd_new(ifn,ias,ist3) + wkptnr(jk)*zsum
+                  enddo
+               enddo
+!$OMP END DO
+               call timesec(td)
+               time_vb = time_vb + td - tc
+            endif
          End Do ! ist3
 
 
@@ -742,6 +819,7 @@ endif
          Deallocate (vxpsiirtmp)
          Deallocate (vxpsigktmp)
          Deallocate (wtmp)
+         if (allocated(xvb)) Deallocate (xvb)
    ! if (allocated(qlmir)) deallocate(qlmir)
 
     !deallocate(qlmir_new)
@@ -769,8 +847,27 @@ if (print_times) then
    write(*,*) '  cp3_fft_pot :', time_cp3(5)
    write(*,*) '  cp3_surf :', time_cp3(6)
    write(*,*) '  cp3_match :', time_cp3(7)
+   if (fock_mt_on) write(*,*) '  time_vb :', time_vb
 endif
       End Do ! non-reduced k-point set
+      if (allocated(vbs)) deallocate(vbs)
+! WP3 step 3.3: at this point vxpsimt = old boundary term + old product-basis term (summed over q),
+! so the old boundary term in coefficients is project_mt(vxpsimt) - wpb_old.
+      if (fock_mt_on) then
+        Allocate (wtmp(max(1,nfmax)))
+        Do ist3 = 1, nstsv
+          Do ias = 1, natmtot
+            is = is_of_ias (ias)
+            call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wtmp)
+            wbd_old(:,ias,ist3) = wtmp(:) - wpb_old(:,ias,ist3)
+          End Do
+        End Do
+        Deallocate (wtmp)
+        dbd(1) = maxval(abs(wbd_new - wbd_old))
+        dbd(2) = maxval(abs(wbd_old))
+        write(*,'("fock_mt 3.3 ikp",i5,": boundary term rel. diff = ",es10.2,", max|old| = ",es10.2)') &
+          ikp, dbd(1)/max(dbd(2),tiny(1d0)), dbd(2)
+      endif
 !stop
 !----------------------------------------------!
 !     valence-core-valence contribution        !
@@ -876,6 +973,8 @@ if (print_times) write(*,*) 'vcv :',tb-ta
 ! WP3 step 3.2: wmt holds the product-basis term (from Tpb2) at this point. vxpsimt still holds
 ! the full old result, so the rest is project_mt(vxpsimt) - wpb_old (linear; the subtraction
 ! goes away with vxpsimt in 3.5).
+! WP3 step 3.3: the boundary term comes from wbd_new; its old version wbd_old is subtracted too,
+! so that project_mt(vxpsimt) - wpb_old - wbd_old is the core-valence term only.
       if (fock_mt_on) then
         call timesec(ta)
         dpb(1) = maxval(abs(wmt - wpb_old))
@@ -888,11 +987,12 @@ if (print_times) write(*,*) 'vcv :',tb-ta
             Do ia = 1, natoms (is)
               ias = idxas (ia, is)
               call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wtmp)
-              wmt(:,ias,ist3) = wmt(:,ias,ist3) + (wtmp(:) - wpb_old(:,ias,ist3))
+              wmt(:,ias,ist3) = wmt(:,ias,ist3) + wbd_new(:,ias,ist3) &
+                + (wtmp(:) - wpb_old(:,ias,ist3) - wbd_old(:,ias,ist3))
             End Do
           End Do
         End Do
-        Deallocate (wtmp, wpb_old)
+        Deallocate (wtmp, wpb_old, wbd_new, wbd_old, is_of_ias)
         Allocate (vnlmt_w(nstsv, nstsv))
         vnlmt_w (:, :) = zzero
         Do is = 1, nspecies
