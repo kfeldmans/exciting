@@ -13,6 +13,7 @@ subroutine calc_vxnl()
 !
     use modinteg 
     use mod_Feldmans, only: build_B_cache
+    use mod_fock_mt, only: init_fock_mt
 ! !DESCRIPTION:
 !   Calculates the non-local exchange potential
 !   and the non-local exchange energy for Hartree-Fock based hybrid functionals.
@@ -317,6 +318,8 @@ else ! Use oepvnl
 !        call init_uproducts_v2
         call init_productbasis_v3
         call init_uproducts_v3
+        ! WP3: coefficient-space tables (not built if an assumption is not met)
+        call init_fock_mt
         fock_tables_built = .true.
       else
         ! the reused tables are valid only if the radial functions are unchanged

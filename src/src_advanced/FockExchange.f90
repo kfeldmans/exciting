@@ -16,6 +16,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       use mod_hybrids, only : gmax_pw_method
       USE OMP_LIB
       use mod_radial
+      use mod_fock_mt, only: fock_mt_on, fock_mt_selftest
   use precision, only:dp
 
       use poterf
@@ -151,6 +152,8 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       call genWFinMT(wf1)
       call genWFonMesh(wf1)
       call timesec(tg1)
+      ! WP3 step 3.0: one-time check of mod_fock_mt's maps and tables (temporary)
+      if (fock_mt_on) call fock_mt_selftest(wf1)
       if (print_times) write(*,*) 'genWF1 :', tg1-tg0
 
 !   call timesec(ta)
