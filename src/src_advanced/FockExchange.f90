@@ -16,7 +16,8 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       use mod_hybrids, only : gmax_pw_method
       USE OMP_LIB
       use mod_radial
-      use mod_fock_mt, only: fock_mt_on, fock_mt_selftest, nfmax, nfun, project_mt
+      use mod_fock_mt, only: fock_mt_on, fock_mt_selftest, nfmax, nfun, project_mt, &
+                             Tpb2, f_irad, f_lm
   use precision, only:dp
 
       use poterf
@@ -97,6 +98,11 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
 ! WP3 step 3.1: MT part of vnlvv from wmt, and its comparison with the zfinpmt path
       Complex (8), Allocatable :: vnlmt_w (:, :)
       Real (8) :: dmt(2), dvv(2)
+! WP3 step 3.2: product-basis term of wmt directly from vxpbtot (Tpb2); for the comparison,
+! wpb_old(f,ias,n) = sum over q of project_mt of the old expandinpb output (temporary, until 3.5)
+      Complex (8), Allocatable :: wpb_old (:, :, :), wtmp (:)
+      Integer :: ifn, npb
+      Real (8) :: dpb(2)
   integer :: ik_test,ist3_test,jk_test,ist2_test
 ! external functions
       Complex (8) zfinp, zfmtinp, zfinpir, zfinpmt
@@ -190,6 +196,10 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       vxpsiirgk (:, :) = 0.d0
       vxpsimt (:, :, :, :) = 0.d0
       wmt (:, :, :) = 0.d0
+      if (fock_mt_on) then
+        Allocate (wpb_old(max(1,nfmax), natmtot, nstsv))
+        wpb_old (:, :, :) = 0.d0
+      endif
       vnlvv (:, :) = 0.d0
 ! calculate the wavefunctions for all states for the input k-point
 
@@ -385,7 +395,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
     call timesec(tb) ! Reset time counter for omp_loop
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2,wtmp,ifn,npb)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3)
       !ist2 
 
          !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -415,6 +425,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          Allocate (vxpb(maxpbf2,lmmaxvr,natmtot))
          Allocate(qlmir_new(lmmaxvr, natmtot))
          allocate(qlmir(lmmaxvr,natmtot))
+         Allocate (wtmp(max(1,nfmax)))
 
          Do ist3 = 1, nstfv
            call timesec(tc)
@@ -699,6 +710,22 @@ endif
          do ist3=1,nstsv
            call expandinpb(vxpbtot(:,:,:,ist3),prod)
            vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+prod%mtrlm(:,:,:,1)*wkptnr(jk)
+           if (fock_mt_on) then
+             ! WP3 step 3.2: W(f,ias,n) += wkptnr(jk) sum_p Tpb2(irad(f),p,ias) vxpbtot(p,lm(f),ias,n);
+             ! one writer per ist3. The old expandinpb output is projected for the comparison.
+             do is = 1, nspecies
+               do ia = 1, natoms(is)
+                 ias = idxas(ia,is)
+                 npb = npbf2(0,ias)
+                 do ifn = 1, nfun(is)
+                   wmt(ifn,ias,ist3) = wmt(ifn,ias,ist3) + wkptnr(jk) * &
+                     sum(Tpb2(f_irad(ifn,is),1:npb,ias)*vxpbtot(1:npb,f_lm(ifn,is),ias,ist3))
+                 enddo
+                 call project_mt(is, ias, prod%mtrlm(:,:,ias,1), wtmp)
+                 wpb_old(:,ias,ist3) = wpb_old(:,ias,ist3) + wkptnr(jk)*wtmp(:)
+               enddo
+             enddo
+           endif
          enddo
 !$OMP END DO NOWAIT
          call timesec(td)
@@ -714,6 +741,7 @@ endif
          Deallocate (potmt0)
          Deallocate (vxpsiirtmp)
          Deallocate (vxpsigktmp)
+         Deallocate (wtmp)
    ! if (allocated(qlmir)) deallocate(qlmir)
 
     !deallocate(qlmir_new)
@@ -845,16 +873,26 @@ if (print_times) write(*,*) 'vcv :',tb-ta
 ! C = wf1%mtordered. Same as zfinpmt below, with the spline weights of fderiv
 ! (mod_fock_mt wspl), so equal up to round-off. The q0corr term (singularity = exc) is not on
 ! this path (fock_mt_on requires exc0d).
+! WP3 step 3.2: wmt holds the product-basis term (from Tpb2) at this point. vxpsimt still holds
+! the full old result, so the rest is project_mt(vxpsimt) - wpb_old (linear; the subtraction
+! goes away with vxpsimt in 3.5).
       if (fock_mt_on) then
         call timesec(ta)
+        dpb(1) = maxval(abs(wmt - wpb_old))
+        dpb(2) = maxval(abs(wpb_old))
+        write(*,'("fock_mt 3.2 ikp",i5,": product-basis term rel. diff = ",es10.2,", max|old| = ",es10.2)') &
+          ikp, dpb(1)/max(dpb(2),tiny(1d0)), dpb(2)
+        Allocate (wtmp(max(1,nfmax)))
         Do ist3 = 1, nstsv
           Do is = 1, nspecies
             Do ia = 1, natoms (is)
               ias = idxas (ia, is)
-              call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wmt(:,ias,ist3))
+              call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wtmp)
+              wmt(:,ias,ist3) = wmt(:,ias,ist3) + (wtmp(:) - wpb_old(:,ias,ist3))
             End Do
           End Do
         End Do
+        Deallocate (wtmp, wpb_old)
         Allocate (vnlmt_w(nstsv, nstsv))
         vnlmt_w (:, :) = zzero
         Do is = 1, nspecies
