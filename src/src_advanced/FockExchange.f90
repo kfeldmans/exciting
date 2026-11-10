@@ -4,7 +4,7 @@
 ! Copyright (C) 2021 D. Zavickis, A. Gulans
 !
 !
-Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
+Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, wmt)
       use modrspace, only: rgrid_max_nmtpoints
       use modbess, only: nfit, zbessi,zbessk,erfc_fit,zilmt,lambda
       use modinteg
@@ -12,11 +12,11 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       Use modinput
       Use modgw, only : kqset,Gkqset, kset, nomax, numin, ikvbm, ikcbm, ikvcm, Gset
       Use potentials, only: coulomb_potential2, coulomb_potential3
-      use weinert, only: poisson_mt_yukawa,pseudocharge_rspace_matrix,match_bound_mt2
+      use weinert, only: poisson_mt_yukawa,pseudocharge_rspace_matrix
       use mod_hybrids, only : gmax_pw_method
       USE OMP_LIB
       use mod_radial
-      use mod_fock_mt, only: fock_mt_on, fock_mt_selftest, nfmax, nfun, project_mt, &
+      use mod_fock_mt, only: fock_mt_on, nfmax, nfun, project_mt, &
                              Tpb2, f_irad, f_lm, Rb, gnt_mt, l_of_lm
   use precision, only:dp
 
@@ -29,12 +29,13 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       Implicit None
 ! arguments
       Integer, Intent (In) :: ikp
-      Real (8), Intent (In) :: q0corr
+      Real (8), Intent (In) :: q0corr ! used only with singularity = exc, which is not supported since WP3 step 3.5
       Complex (8), Intent (Out) :: vnlvv (nstsv, nstsv)
       Complex (8), Intent (Out) :: vxpsiirgk (ngkmax, nstsv)
-      Complex (8), Intent (Out) :: vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv)
-! WP3: wmt(f, ias, n) = int u_f(r) [vxpsimt(:,:,ias,n)]_lm(f)(r) r^2 dr (fderiv spline weights),
-! f in the order of wf%mtordered; filled only when fock_mt_on
+! WP3: muffin-tin part of V_x psi_n in coefficient space,
+! wmt(f, ias, n) = int u_f(r) [V_x psi_n]_lm(f)(r) r^2 dr (fderiv spline weights, mod_fock_mt),
+! f in the order of wf%mtordered. Sum of three terms: product basis (Tpb2), boundary
+! (Gaunt and Rb from the surface coefficients), core-valence (project_mt of the vcv block).
       Complex (8), Intent (Out) :: wmt (max(1,nfmax), natmtot, nstsv)
 
 ! local variables
@@ -95,34 +96,35 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       complex(8), Allocatable :: vxpbtot(:,:,:,:) !lmmaxvr,maxpbf2,natmtot,nstsv
 
       type (WFType) :: wf1,wf2,prod,pot
-! WP3 step 3.1: MT part of vnlvv from wmt, and its comparison with the zfinpmt path
+! WP3: MT part of vnlvv from wmt: vnlmt_w(ist1,ist3) = sum_{ias,f} conj(C(f,ist1,ias)) wmt(f,ias,ist3)
       Complex (8), Allocatable :: vnlmt_w (:, :)
-      Real (8) :: dmt(2), dvv(2)
-! WP3 step 3.2: product-basis term of wmt directly from vxpbtot (Tpb2); for the comparison,
-! wpb_old(f,ias,n) = sum over q of project_mt of the old expandinpb output (temporary, until 3.5)
-      Complex (8), Allocatable :: wpb_old (:, :, :), wtmp (:)
+! WP3 product-basis term: wmt(f,ias,n) += wkptnr sum_p Tpb2(irad(f),p,ias) vxpbtot(p,lm(f),ias,n)
       Integer :: ifn, npb
-      Real (8) :: dpb(2)
-! WP3 step 3.3: boundary term from the surface coefficients, without the angular mesh.
+! WP3 boundary term from the surface coefficients, without the angular mesh.
 ! vbs(LM,ias,m) = v^{n m}_{ias,LM} for the current n = ist3 (shared; column m written by the thread
 ! that has pair m); xvb(LM,f') = sum_m vbs(LM,ias,m) C^m(f',ias) (per thread);
-! wbd_new(f,ias,n) = sum_q wkptnr sum_{LM,f'} <Y_lm(f)|Y_LM|Y_l'm'(f')> Rb(irad(f),L,irad(f'),ias) xvb(LM,f');
-! wbd_old = project_mt of the old per-pair prodshrs2 result, summed over m and q (temporary, until 3.5)
-      Complex (8), Allocatable :: vbs (:, :, :), xvb (:, :), wbd_new (:, :, :), wbd_old (:, :, :)
+! wmt(f,ias,n) += wkptnr sum_{LM,f'} <Y_lm(f)|Y_LM|Y_l'm'(f')> Rb(irad(f),L,irad(f'),ias) xvb(LM,f')
+      Complex (8), Allocatable :: vbs (:, :, :), xvb (:, :)
       Integer, Allocatable :: is_of_ias (:)
-! WP3 step 3.4: core-valence term in coefficients. wcv_new(f,ias,n) = project_mt of zfmt1 in the vcv
-! block; wcv_old = project_mt(vxpsimt) - wpb_old - wbd_old (temporary, until 3.5)
-      Complex (8), Allocatable :: wcv_new (:, :, :), wcv_old (:, :, :)
-      Real (8) :: dcv(2)
+! WP3 core-valence term: wmt(:,ias,n) += project_mt of zfmt1 (wtmp per thread)
+      Complex (8), Allocatable :: wtmp (:)
+      Logical :: have_core
       Integer :: ifn2, igt, lm1, lm3, lmb, irad1, irad2
       Complex (8) :: zsum
-      Real (8) :: dbd(2), time_vb
+      Real (8) :: time_vb
   integer :: ik_test,ist3_test,jk_test,ist2_test
+  integer :: ist
 ! external functions
       Complex (8) zfinp, zfmtinp, zfinpir, zfinpmt
       External zfinp, zfmtinp, zfinpir, zfinpmt
       logical :: print_times
       print_times=.true.
+
+! WP3 step 3.5: only the coefficient-space muffin-tin path exists (calc_vxnl stops before)
+      if (.not. fock_mt_on) then
+        write(*,'("Error(FockExchange): mod_fock_mt tables not built (fock_mt_on is false)")')
+        stop
+      endif
 
   ik_test = 4
   ist3_test = 2
@@ -175,11 +177,8 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       call genWF(ik,wf1)
       
       call orderWF(wf1)
-      call genWFinMT(wf1)
-      call genWFonMesh(wf1)
+      ! WP3 step 3.5: wf1%mtrlm and wf1%mtmesh are made only for the core-valence block below
       call timesec(tg1)
-      ! WP3 step 3.0: one-time check of mod_fock_mt's maps and tables (temporary)
-      if (fock_mt_on) call fock_mt_selftest(wf1)
       if (print_times) write(*,*) 'genWF1 :', tg1-tg0
 
 !   call timesec(ta)
@@ -208,24 +207,13 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
 ! set the nuclear charges to zero
       zn (:) = 0.d0
       vxpsiirgk (:, :) = 0.d0
-      vxpsimt (:, :, :, :) = 0.d0
       wmt (:, :, :) = 0.d0
-      if (fock_mt_on) then
-        Allocate (wpb_old(max(1,nfmax), natmtot, nstsv))
-        wpb_old (:, :, :) = 0.d0
-        Allocate (wbd_new(max(1,nfmax), natmtot, nstsv), wbd_old(max(1,nfmax), natmtot, nstsv))
-        wbd_new (:, :, :) = 0.d0
-        wbd_old (:, :, :) = 0.d0
-        Allocate (wcv_new(max(1,nfmax), natmtot, nstsv), wcv_old(max(1,nfmax), natmtot, nstsv))
-        wcv_new (:, :, :) = 0.d0
-        wcv_old (:, :, :) = 0.d0
-        Allocate (is_of_ias(natmtot))
-        Do is = 1, nspecies
-          Do ia = 1, natoms (is)
-            is_of_ias (idxas(ia, is)) = is
-          End Do
+      Allocate (is_of_ias(natmtot))
+      Do is = 1, nspecies
+        Do ia = 1, natoms (is)
+          is_of_ias (idxas(ia, is)) = is
         End Do
-      endif
+      End Do
       vnlvv (:, :) = 0.d0
 ! calculate the wavefunctions for all states for the input k-point
 
@@ -360,9 +348,7 @@ call timesec(ta)
 
          call genWF(jk,wf2)
          call orderWF(wf2)
-         call genWFinMT(wf2)
-         call genWFonMesh(wf2)
-         deallocate(wf2%mtrlm)
+         ! WP3 step 3.5: no wf2%mtrlm / wf2%mtmesh (only the old prodshrs2 path used them)
 
 call timesec(tb)
 if (print_times) write(*,*) 'genWFs :',tb-ta
@@ -396,15 +382,16 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          endif
 
          !write(*,*)"cutoff", cutoff,"ik, jk",ik,jk,"handleG0",handleG0
-         ! WP3 step 3.3: fock_mt_on implies the Coulomb path (erfcapprox = none, exc0d), so no handleG0
-         if (fock_mt_on .and. handleG0) then
+         ! WP3: fock_mt_on implies the Coulomb path (erfcapprox = none, exc0d), so no handleG0.
+         ! Since step 3.5 the Yukawa, PW and handleG0 branches of the pair loop below are not
+         ! reachable (kept from the old code; pot%mtrlm, prod%mtrlm, potmt0, potir0 are no longer
+         ! allocated for them).
+         if (handleG0) then
             write(*,'("Error(FockExchange): fock_mt_on with handleG0")')
             stop
          endif
-         if (fock_mt_on) then
-            if (allocated(vbs)) deallocate(vbs)
-            Allocate (vbs(lmmaxvr, natmtot, nomax))
-         endif
+         if (allocated(vbs)) deallocate(vbs)
+         Allocate (vbs(lmmaxvr, natmtot, nomax))
 
          vxpbtot=0d0
 
@@ -431,7 +418,7 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
     call timesec(tb) ! Reset time counter for omp_loop
 !write(*,*)"pirms", OMP_GET_THREAD_NUM()
 !write(*,*)"nomax",nomax,"nstfv",nstfv
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2,wtmp,ifn,npb,xvb,ifn2,igt,lm1,lm3,lmb,irad1,irad2,zsum)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3) REDUCTION(max: time_vb)
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ia,is,ias,vxpb,qlmir_new,qlmir, ist3, wf1ir,wf2ir,prodir,potir,vxpsiirtmp,vxpsigktmp,potmt0,potir0, igk,ifg,prod,zrho01,pot,j,ifit2,rhoG0,tc,td,ist2,tf1,tf2,ifn,npb,xvb,ifn2,igt,lm1,lm3,lmb,irad1,irad2,zsum)REDUCTION(max: time_coul) REDUCTION(max: time_fft) REDUCTION(max: time_prod) REDUCTION(max: time_qlm) REDUCTION(max: time_rs) REDUCTION(max: time_misc) REDUCTION(max: time_critical) REDUCTION(max: time_pw) REDUCTION(max: time_cp3) REDUCTION(max: time_vb)
       !ist2 
 
          !write(*,*)"pēc", OMP_GET_THREAD_NUM()
@@ -448,22 +435,16 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
          call WFInit(prod)
          call WFInit(pot)
 
-         Allocate(pot%mtrlm(lmmaxvr,nrmtmax,natmtot,1))
-         Allocate(potmt0(lmmaxvr,nrmtmax,natmtot))
-
-         Allocate(prod%mtrlm(lmmaxvr,nrmtmax,natmtot,1))
          Allocate (wf1ir(ngrtot))
          Allocate (wf2ir(ngrtot))
          Allocate (prodir(ngrtot))
          Allocate (potir(ngrtot))
-         Allocate (potir0(ngrtot))
          Allocate (vxpsiirtmp(ngrtot))
          Allocate (vxpsigktmp(ngkmax))
          Allocate (vxpb(maxpbf2,lmmaxvr,natmtot))
          Allocate(qlmir_new(lmmaxvr, natmtot))
          allocate(qlmir(lmmaxvr,natmtot))
-         Allocate (wtmp(max(1,nfmax)))
-         if (fock_mt_on) Allocate (xvb(lmmaxvr, max(1,nfmax)))
+         Allocate (xvb(lmmaxvr, max(1,nfmax)))
 
          Do ist3 = 1, nstfv
            call timesec(tc)
@@ -540,7 +521,6 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                endif
 
                call timesec(tc)
-               pot%mtrlm(:,:,:,1)=zzero
                potir=zzero
                if ((input%groundstate%hybrid%erfcapprox.eq."truncatedYukawa").or.(input%groundstate%hybrid%erfcapprox.eq."Yukawa")) then !Yukawa case
                   potmt0=zzero
@@ -571,31 +551,12 @@ if (print_times) write(*,*) 'genWFs :',tb-ta
                endif
    
                if ((input%groundstate%hybrid%erfcapprox.eq."PW").or.(input%groundstate%hybrid%erfcapprox.eq."none")) then
-                  potmt0=zzero
-                  potir0=zzero
-
-                  if (fock_mt_on) then
-                  ! WP3 step 3.3: surface coefficients into vbs(:,:,ist2); coulomb_potential3 then
-                  ! skips the boundary matching. The old path (comparison, until 3.5) repeats that
-                  ! matching here, the same call as inside coulomb_potential3, so pot%mtrlm is unchanged.
+                  ! WP3: surface coefficients into vbs(:,:,ist2); with vbound present
+                  ! coulomb_potential3 needs no muffin-tin density or potential arrays
                   Call coulomb_potential3 (qlmir_new,nrcmt, rcmt, ngvec, gqc, igq0, &
-                  & jlgqr, ylmgq, sfacgq, prod%mtrlm(:,:,:,1), &
-                  & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v,qmtlm(:,:,ist2), &
-                  & cutoff=cutoff, hybrid_in=.true.,&
+                  & jlgqr, ylmgq, sfacgq, zrhoir=prodir(:), zvclir=potir, zrho0=zrho02, qvec=v, &
+                  & qmtlm=qmtlm(:,:,ist2), cutoff=cutoff, hybrid_in=.true.,&
                   & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1),times=time_cp3,vbound=vbs(:,:,ist2))
-                  do is = 1, nspecies
-                    do ia = 1, natoms(is)
-                      ias = idxas(ia,is)
-                      call match_bound_mt2(lmaxvr, nrcmt(is), rcmt(:,is), rmt(is), vbs(:,ias,ist2), pot%mtrlm(:,:,ias,1))
-                    enddo
-                  enddo
-                  else
-                  Call coulomb_potential3 (qlmir_new,nrcmt, rcmt, ngvec, gqc, igq0, &
-                  & jlgqr, ylmgq, sfacgq, prod%mtrlm(:,:,:,1), &
-                  & prodir(:), pot%mtrlm(:,:,:,1), potir, zrho02,v,qmtlm(:,:,ist2), &
-                  & cutoff=cutoff, hybrid_in=.true.,&
-                  & rpseudo_in=rpseudo,rpseudomat=rpseudomat(:,:,:,1),times=time_cp3)
-                  endif
 
 !                  if (input%groundstate%hybrid%erfcapprox.ne."PW")then 
 !                     pot%mtrlm(:,:,:,1)=potmt0
@@ -696,34 +657,8 @@ endif
                endif
 
    !-----------------------------------------------------------------------------------1
-if(.false.)then
- write(*,*) 'debug' 
- open(11,file='mt_test.dat',status='replace')
- do ir=1, nrmt(1)
- write(11,*) spr(ir,1),dble(pot%mtrlm(1,ir,1,1))
-!  write(11,*) spr(ir,is),",",dble(zpot(1,ir))*y00 
- enddo
- close(11)
- stop
-endif
-               
-   call timesec(tc)
-!               call prodshrs(pot%mtrlm(:,:,:,1),wf2%mtmesh(:,:,:,ist2),prod%mtrlm(:,:,:,1))
-               call prodshrs2(pot%mtrlm(:,:,:,1),wf2%mtmesh(:,:,:,ist2))
-
-   call timesec(td)
-   time_misc=time_misc+td-tc
-
-if(.false.)then
- write(*,*) 'debug' 
- open(11,file='mt_test.dat',status='replace')
- do ir=1, nrmt(1)
- write(11,*) spr(ir,1),dble(pot%mtrlm(1,ir,1,1))
-!  write(11,*) spr(ir,is),",",dble(zpot(1,ir))*y00 
- enddo
- close(11)
- stop
-endif
+   ! WP3 step 3.5: the muffin-tin part of this pair goes into wmt via vbs (boundary term after
+   ! the ist2 loop) and vxpbtot (product-basis term); no per-pair muffin-tin product.
 
 !   time_rs=time_rs+td-tc
 
@@ -748,8 +683,6 @@ endif
                Do igk=1, Gkqset%ngk (1, ik)
                   vxpsiirgk(igk, ist3)=vxpsiirgk(igk, ist3)+vxpsigktmp(igk)
                End Do
-!               vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+prod%mtrlm(:,:,:,1)*wkptnr(jk)
-               vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+pot%mtrlm(:,:,:,1)*wkptnr(jk)
 !$OMP END CRITICAL
                call timesec(td)
                time_critical=time_critical+td-tc
@@ -757,10 +690,10 @@ endif
             End Do ! ist2
 !!$OMP END DO NOWAIT
 !$OMP END DO
-            ! WP3 step 3.3: after the barrier vbs holds all m for this ist3. Per atom one ZGEMM
+            ! WP3 boundary term: after the barrier vbs holds all m for this ist3. Per atom one ZGEMM
             ! X = vbs(:,ias,:) C^T (C = wf2%mtordered, not conjugated: psi_m enters the product as is),
-            ! then the Gaunt and Rb sums. One writer per atom slice of wbd_new.
-            if (fock_mt_on) then
+            ! then the Gaunt and Rb sums. One writer per atom slice of wmt(:,:,ist3); the
+            ! product-basis loop after the ist3 loop writes wmt only after this DO's barrier.
                call timesec(tc)
 !$OMP DO SCHEDULE(DYNAMIC)
                do ias = 1, natmtot
@@ -779,37 +712,30 @@ endif
                            zsum = zsum + gnt_mt%val(igt,lm1,lm3)*Rb(irad1,l_of_lm(lmb),irad2,ias)*xvb(lmb,ifn2)
                         enddo
                      enddo
-                     wbd_new(ifn,ias,ist3) = wbd_new(ifn,ias,ist3) + wkptnr(jk)*zsum
+                     wmt(ifn,ias,ist3) = wmt(ifn,ias,ist3) + wkptnr(jk)*zsum
                   enddo
                enddo
 !$OMP END DO
                call timesec(td)
                time_vb = time_vb + td - tc
-            endif
          End Do ! ist3
 
 
          call timesec(tc)
 !$OMP DO
          do ist3=1,nstsv
-           call expandinpb(vxpbtot(:,:,:,ist3),prod)
-           vxpsimt(:,:,:,ist3)=vxpsimt(:,:,:,ist3)+prod%mtrlm(:,:,:,1)*wkptnr(jk)
-           if (fock_mt_on) then
-             ! WP3 step 3.2: W(f,ias,n) += wkptnr(jk) sum_p Tpb2(irad(f),p,ias) vxpbtot(p,lm(f),ias,n);
-             ! one writer per ist3. The old expandinpb output is projected for the comparison.
-             do is = 1, nspecies
-               do ia = 1, natoms(is)
-                 ias = idxas(ia,is)
-                 npb = npbf2(0,ias)
-                 do ifn = 1, nfun(is)
-                   wmt(ifn,ias,ist3) = wmt(ifn,ias,ist3) + wkptnr(jk) * &
-                     sum(Tpb2(f_irad(ifn,is),1:npb,ias)*vxpbtot(1:npb,f_lm(ifn,is),ias,ist3))
-                 enddo
-                 call project_mt(is, ias, prod%mtrlm(:,:,ias,1), wtmp)
-                 wpb_old(:,ias,ist3) = wpb_old(:,ias,ist3) + wkptnr(jk)*wtmp(:)
+           ! WP3 product-basis term: W(f,ias,n) += wkptnr(jk) sum_p Tpb2(irad(f),p,ias) vxpbtot(p,lm(f),ias,n);
+           ! one writer per ist3
+           do is = 1, nspecies
+             do ia = 1, natoms(is)
+               ias = idxas(ia,is)
+               npb = npbf2(0,ias)
+               do ifn = 1, nfun(is)
+                 wmt(ifn,ias,ist3) = wmt(ifn,ias,ist3) + wkptnr(jk) * &
+                   sum(Tpb2(f_irad(ifn,is),1:npb,ias)*vxpbtot(1:npb,f_lm(ifn,is),ias,ist3))
                enddo
              enddo
-           endif
+           enddo
          enddo
 !$OMP END DO NOWAIT
          call timesec(td)
@@ -820,13 +746,10 @@ endif
          Deallocate (wf2ir)
          Deallocate (prodir)
          Deallocate (potir)
-         Deallocate (potir0)
          Deallocate (wf1ir)
-         Deallocate (potmt0)
          Deallocate (vxpsiirtmp)
          Deallocate (vxpsigktmp)
-         Deallocate (wtmp)
-         if (allocated(xvb)) Deallocate (xvb)
+         Deallocate (xvb)
    ! if (allocated(qlmir)) deallocate(qlmir)
 
     !deallocate(qlmir_new)
@@ -841,7 +764,6 @@ if (print_times) then
    write(*,*) '  time_coul :', time_coul
    write(*,*) '  time_fft :', time_fft
    write(*,*) '  time_prod :', time_prod
-   write(*,*) '  time_misc :', time_misc
    write(*,*) '  time_rs :', time_rs
    write(*,*) '  time_critical :', time_critical
    write(*,*) '  time_pw :',time_pw
@@ -854,41 +776,37 @@ if (print_times) then
    write(*,*) '  cp3_fft_pot :', time_cp3(5)
    write(*,*) '  cp3_surf :', time_cp3(6)
    write(*,*) '  cp3_match :', time_cp3(7)
-   if (fock_mt_on) write(*,*) '  time_vb :', time_vb
+   write(*,*) '  time_vb :', time_vb
 endif
       End Do ! non-reduced k-point set
       if (allocated(vbs)) deallocate(vbs)
-! WP3 step 3.3: at this point vxpsimt = old boundary term + old product-basis term (summed over q),
-! so the old boundary term in coefficients is project_mt(vxpsimt) - wpb_old.
-      if (fock_mt_on) then
-        Allocate (wtmp(max(1,nfmax)))
-        Do ist3 = 1, nstsv
-          Do ias = 1, natmtot
-            is = is_of_ias (ias)
-            call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wtmp)
-            wbd_old(:,ias,ist3) = wtmp(:) - wpb_old(:,ias,ist3)
-          End Do
-        End Do
-        Deallocate (wtmp)
-        dbd(1) = maxval(abs(wbd_new - wbd_old))
-        dbd(2) = maxval(abs(wbd_old))
-        write(*,'("fock_mt 3.3 ikp",i5,": boundary term rel. diff = ",es10.2,", max|old| = ",es10.2)') &
-          ikp, dbd(1)/max(dbd(2),tiny(1d0)), dbd(2)
-      endif
+      Deallocate (is_of_ias)
 !stop
 !----------------------------------------------!
 !     valence-core-valence contribution        !
 !----------------------------------------------!
 call timesec(ta)
 
-      call genWFinMT(wf1)
-      call genWFonMesh(wf1)
-
+      ! WP3 step 3.5: the core x valence products are still formed on the angular mesh, so
+      ! wf1%mtmesh is needed here, and only if some species has core states
+      have_core = .false.
+      Do is = 1, nspecies
+        Do ist = 1, spnst (is)
+          if (spcore(ist, is)) have_core = .true.
+        End Do
+      End Do
+      if (have_core) then
+        call genWFinMT(wf1)
+        call genWFonMesh(wf1)
+        deallocate(wf1%mtrlm)
+      endif
          
       Allocate (zrhomt(lmmaxvr, nrcmtmax))
       allocate (rfmt(nrcmtmax))
       Allocate (zfmt(lmmaxvr, nrcmtmax),zfmt0(lmmaxvr, nrcmtmax),zfmt1(lmmaxvr, nrcmtmax))
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(nrc,is,ia,ias,ist2,ist3,l,norm,lm,m,ir,uir,wfcr1,zrhomt,zfmt,ifit,zfmt0,zfmt1,zvcltp,rfmt,ipt)
+      if (have_core) then
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(nrc,is,ia,ias,ist2,ist3,l,norm,lm,m,ir,uir,wfcr1,zrhomt,zfmt,ifit,zfmt0,zfmt1,zvcltp,rfmt,ipt,wtmp)
+      Allocate (wtmp(max(1,nfmax)))
       Do is = 1, nspecies
         if (spnst (is).ne.0) then
           nrc = nrcmt(is)
@@ -956,137 +874,54 @@ call timesec(ta)
                    End Do ! m
                  End If ! spcore(ist2, is)
               End Do ! ist2
-!$OMP CRITICAL
-              vxpsimt(:,:,ias,ist3)=vxpsimt(:,:,ias,ist3)+zfmt1 !rod%mtrlm(:,:,:,1)*wkptnr(jk)
-!$OMP END CRITICAL
-              ! WP3 step 3.4: the same term projected onto the sphere functions. Each (ias, ist3)
+              ! WP3 core-valence term projected onto the sphere functions. Each (ias, ist3)
               ! is visited exactly once (ist3 work-shared, ias fixed here), so one writer, no CRITICAL.
-              if (fock_mt_on) call project_mt(is, ias, zfmt1, wcv_new(:,ias,ist3))
+              call project_mt(is, ias, zfmt1, wtmp)
+              wmt(:,ias,ist3) = wmt(:,ias,ist3) + wtmp(:)
 
             End Do ! ist3
 !$OMP END DO
           End Do ! ia
         End If !spnst
       End Do ! is
+      Deallocate (wtmp)
 !$OMP END PARALLEL
+      endif ! have_core
       Deallocate(zrhomt,rfmt)
 call timesec(tb)
 if (print_times) write(*,*) 'vcv :',tb-ta
 
 
 
-! WP3 step 3.1: project vxpsimt onto the sphere functions, and the MT part of vnlvv
-! from the coefficients: vnlmt_w(ist1,ist3) = sum_{ias,f} conj(C(f,ist1,ias)) wmt(f,ias,ist3),
-! C = wf1%mtordered. Same as zfinpmt below, with the spline weights of fderiv
-! (mod_fock_mt wspl), so equal up to round-off. The q0corr term (singularity = exc) is not on
-! this path (fock_mt_on requires exc0d).
-! WP3 step 3.2: wmt holds the product-basis term (from Tpb2) at this point. vxpsimt still holds
-! the full old result, so the rest is project_mt(vxpsimt) - wpb_old (linear; the subtraction
-! goes away with vxpsimt in 3.5).
-! WP3 step 3.3: the boundary term comes from wbd_new; its old version wbd_old is subtracted too,
-! so that project_mt(vxpsimt) - wpb_old - wbd_old is the core-valence term only.
-! WP3 step 3.4: that difference is now only wcv_old, for the comparison with wcv_new; wmt is
-! assembled from the three new terms (product basis, boundary, core-valence) alone.
-      if (fock_mt_on) then
-        call timesec(ta)
-        dpb(1) = maxval(abs(wmt - wpb_old))
-        dpb(2) = maxval(abs(wpb_old))
-        write(*,'("fock_mt 3.2 ikp",i5,": product-basis term rel. diff = ",es10.2,", max|old| = ",es10.2)') &
-          ikp, dpb(1)/max(dpb(2),tiny(1d0)), dpb(2)
-        Allocate (wtmp(max(1,nfmax)))
-        Do ist3 = 1, nstsv
-          Do is = 1, nspecies
-            Do ia = 1, natoms (is)
-              ias = idxas (ia, is)
-              call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wtmp)
-              wcv_old(:,ias,ist3) = wtmp(:) - wpb_old(:,ias,ist3) - wbd_old(:,ias,ist3)
-              wmt(:,ias,ist3) = wmt(:,ias,ist3) + wbd_new(:,ias,ist3) + wcv_new(:,ias,ist3)
-            End Do
-          End Do
+! WP3: MT part of vnlvv from the coefficients, vnlmt_w(ist1,ist3) = sum_{ias,f} conj(C(f,ist1,ias))
+! wmt(f,ias,ist3), C = wf1%mtordered. The q0corr term (singularity = exc) is not supported.
+      call timesec(ta)
+      Allocate (vnlmt_w(nstsv, nstsv))
+      vnlmt_w (:, :) = zzero
+      Do is = 1, nspecies
+        Do ia = 1, natoms (is)
+          ias = idxas (ia, is)
+          Call zgemm ('C', 'N', nstsv, nstsv, nfun(is), zone, wf1%mtordered(1,1,ias), &
+           & size(wf1%mtordered,1), wmt(1,ias,1), size(wmt,1)*natmtot, zone, vnlmt_w, nstsv)
         End Do
-        dcv(1) = maxval(abs(wcv_new - wcv_old))
-        dcv(2) = maxval(abs(wcv_old))
-        write(*,'("fock_mt 3.4 ikp",i5,": core-valence term rel. diff = ",es10.2,", max|old| = ",es10.2)') &
-          ikp, dcv(1)/max(dcv(2),tiny(1d0)), dcv(2)
-        Deallocate (wtmp, wpb_old, wbd_new, wbd_old, wcv_new, wcv_old, is_of_ias)
-        Allocate (vnlmt_w(nstsv, nstsv))
-        vnlmt_w (:, :) = zzero
-        Do is = 1, nspecies
-          Do ia = 1, natoms (is)
-            ias = idxas (ia, is)
-            Call zgemm ('C', 'N', nstsv, nstsv, nfun(is), zone, wf1%mtordered(1,1,ias), &
-             & size(wf1%mtordered,1), wmt(1,ias,1), size(wmt,1)*natmtot, zone, vnlmt_w, nstsv)
-          End Do
-        End Do
-        call timesec(tb)
-        if (print_times) write(*,*) 'fock_mt_proj :', tb-ta
-        dmt = 0.d0
-        dvv = 0.d0
-      endif
+      End Do
+      call timesec(tb)
+      if (print_times) write(*,*) 'fock_mt_proj :', tb-ta
 
-      Allocate (wf1ir(ngrtot))
-      Allocate (vxpsiirtmp(ngrtot))
 call timesec(ta)
-! !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ist1,ist3,ztir,igk,ztmt)
-! !$OMP DO collapse(2)
       Do ist1 = 1, nstsv
-
-!!!!!!!!!!!!!!!!!!!!!!!!!! KOREKCIJA ko vajadzētu atslēgt Aux funct method
-         if(input%groundstate%hybrid%singularity.eq."exc")then
-            write(*,*)"q0corr",q0corr
-            If ((ist1.le.nomax).and.(q0corr.ne.0.d0)) Then
-               ! Evaluate wavefunction in real space
-               wf1ir(:) = 0.d0
-               Do igk = 1, Gkqset%ngk (1, ik)
-                  ifg = igfft (Gkqset%igkig(igk, 1, ik))
-                  wf1ir(ifg) = t1*wf1%gk(igk, ist1)
-               End Do
-               Call zfftifc (3, ngrid, 1, wf1ir(:))
-
-               vxpsimt(:,:,:,ist1) = vxpsimt(:,:,:,ist1) + q0corr*wf1%mtrlm(:,:,:,ist1)
-
-               ! Apply correction to IR part and roll back correction to momentum space
-               vxpsiirtmp(:) = q0corr*wf1ir(:)*cfunir(:)
-               Call zfftifc (3, ngrid,-1,vxpsiirtmp)
-               Do igk=1, Gkqset%ngk (1, ik)
-                  vxpsiirgk(igk, ist1)=vxpsiirgk(igk, ist1)+vxpsiirtmp(igfft(Gkqset%igkig(igk, 1, ik)))*sqrt(Omega) ! pace IR
-               End Do
-            endif ! (ist1.le.nomax).and.(q0corr.ne.0.d0)
-         End If ! singularity.eq.exc
-! !!!!!!!!!!!!!!!!!!!!!!!!!! KOREKCIJA ko vajadzētu atslēgt Aux funct method//
-         ! Write(*,*) 'ist1=',ist1
          Do ist3 = 1, nstsv
-
             ztir = 0.d0
-
             Do igk = 1, Gkqset%ngk (1, ik)
                ztir = ztir + conjg(wf1%gk(igk, ist1))*vxpsiirgk(igk,ist3)
             End Do
-            ztmt = zfinpmt (.True., wf1%mtrlm(:,:,:,ist1),vxpsimt(:,:,:,ist3))
-
-            if (fock_mt_on) then
-              ! WP3 step 3.1: the coefficient path is used; the old value only for comparison
-              dmt(1) = max(dmt(1), abs(vnlmt_w(ist1,ist3) - ztmt))
-              dmt(2) = max(dmt(2), abs(ztmt))
-              dvv(2) = max(dvv(2), abs(ztmt + ztir))
-              vnlvv (ist1, ist3) = vnlvv (ist1, ist3) - vnlmt_w(ist1,ist3) - ztir
-            else
-              vnlvv (ist1, ist3) = vnlvv (ist1, ist3) - ztmt - ztir
-            endif
-
+            vnlvv (ist1, ist3) = vnlvv (ist1, ist3) - vnlmt_w(ist1,ist3) - ztir
          End Do ! ist3
       End Do ! ist1
-! !$OMP END PARALLEL
 call timesec(tb)
 
 if (print_times) write(*,*) 'Matrix :',tb-ta
-      if (fock_mt_on) then
-        ! the IR part is common to both, so max|new - old| of vnlvv equals that of its MT part
-        dvv(1) = dmt(1)
-        write(*,'("fock_mt 3.1 ikp",i5,": vnlvv MT part rel. diff = ",es10.2,", vnlvv rel. diff = ",es10.2,", max|old MT| = ",es10.2)') &
-          ikp, dmt(1)/max(dmt(2),tiny(1d0)), dvv(1)/max(dvv(2),tiny(1d0)), dmt(2)
-        Deallocate (vnlmt_w)
-      endif
+      Deallocate (vnlmt_w)
 
 if (.false.) then
       write(*,*)"element(1,1)",dble(vnlvv(1,1)),",",imag(vnlvv(1,1))
@@ -1105,9 +940,7 @@ end if
       Deallocate (vgqc, tpgqc, gqc, jlgqr, jlgq0r)
       Deallocate (ylmgq, sfacgq)
       Deallocate (wfcr1)
-      Deallocate (wf1ir)
       Deallocate (zvcltp, zfmt, zfmt0,zfmt1)
-      Deallocate (vxpsiirtmp)
 !      Deallocate (vxpsiirtmp)   
 !      Deallocate (vxpsigktmp)   
       !Deallocate (zvclmt) 

@@ -13,7 +13,7 @@ subroutine calc_vxnl()
 !
     use modinteg 
     use mod_Feldmans, only: build_B_cache
-    use mod_fock_mt, only: init_fock_mt, nfmax
+    use mod_fock_mt, only: init_fock_mt, nfmax, fock_mt_on
 ! !DESCRIPTION:
 !   Calculates the non-local exchange potential
 !   and the non-local exchange energy for Hartree-Fock based hybrid functionals.
@@ -41,8 +41,9 @@ subroutine calc_vxnl()
     complex(8), external :: zdotc
     logical :: hybrid
 ! allocatables for ACE
-    complex(8), allocatable :: vxpsimt (:, :, :, :), vxpsiir(:, :)
-! WP3: projections of vxpsimt onto the sphere functions, wmt(f, ias, n) (mod_fock_mt)
+    complex(8), allocatable :: vxpsiir(:, :)
+! WP3: muffin-tin part of V_x psi_n as projections onto the sphere functions,
+! wmt(f, ias, n) = int u_f(r) [V_x psi_n]_lm(f)(r) r^2 dr (mod_fock_mt)
     complex(8), allocatable :: wmt (:, :, :)
     integer :: lcore
     real(8) ,allocatable :: psi_core(:),vxpsi_core(:)
@@ -286,7 +287,6 @@ else ! Use oepvnl
       if (allocated(vxnl)) deallocate(vxnl)
       allocate(vxnl(nstfv,nstfv,kset%nkpt))
       allocate(vxpsiir (ngkmax, nstsv))
-      allocate(vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv))
       vxnl(:,:,:) = zzero
 
 
@@ -339,7 +339,19 @@ else ! Use oepvnl
 !      call release_radial
 !      stop
 
-      ! WP3: W(f, ias, n), passed from FockExchange to calcACE (size 1 if fock_mt is off)
+      ! WP3 step 3.5: the muffin-tin exchange exists only in coefficient space, so the run
+      ! stops if mod_fock_mt's assumptions are not met (printed by init_fock_mt above)
+      if (.not. fock_mt_on) then
+        write(*,*)
+        write(*,'("Error(calc_vxnl): this build computes the muffin-tin exchange only in")')
+        write(*,'(" coefficient space (mod_fock_mt), and an assumption of that path is not")')
+        write(*,'(" met (see the Info(mod_fock_mt) lines above). Not supported: erfcapprox")')
+        write(*,'(" other than none, singularity other than exc0d, rpseudo or rsurf false,")')
+        write(*,'(" spin, lmaxmat /= lmaxapw /= lmaxvr, lradstep /= 1, updateRadial.")')
+        write(*,*)
+        stop
+      end if
+      ! W(f, ias, n), passed from FockExchange to calcACE
       allocate(wmt(max(1,nfmax), natmtot, nstsv))
 
       ! Start to generate B_ik's for FockExchange
@@ -351,7 +363,6 @@ else ! Use oepvnl
       Do ik = 1, nkpt
 #endif
         vxpsiir=zzero
-        vxpsimt=zzero
         wmt=zzero
         if (input%groundstate%Hybrid%updateRadial) then        
           !!!!!!!veca baze!!!!!!!
@@ -361,7 +372,7 @@ else ! Use oepvnl
         endif
         
         call timesec(ta)
-        call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,vxpsimt,wmt)
+        call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,wmt)
         call timesec(tb)
         if (input%groundstate%Hybrid%updateRadial) then 
           !!!!!!!jauna baze!!!!!!!
@@ -379,7 +390,7 @@ else ! Use oepvnl
         end do
 
         call timesec(ta)
-        call calcACE (ik, vxnl(:, :, ik),vxpsiir,vxpsimt,wmt)
+        call calcACE (ik, vxnl(:, :, ik),vxpsiir,wmt)
         call timesec(tb)
         if (rank==0) write(*,*) 'calcACE :',tb-ta
 
@@ -392,7 +403,6 @@ else ! Use oepvnl
     if (input%groundstate%Hybrid%updateRadial) call release_fock_tables
 
     deallocate(vxpsiir)
-    deallocate(vxpsimt)
     deallocate(wmt)
 !    deallocate(gntyyy)
 !    deallocate(gntyyyT)

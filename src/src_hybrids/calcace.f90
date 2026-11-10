@@ -4,19 +4,18 @@
 ! Copyright (C) 2021 J. Cimurs, A. Gulans
 !
 !
-Subroutine calcACE (ikp, vnlvv, vxpsiir,vxpsimt,wmt)
+Subroutine calcACE (ikp, vnlvv, vxpsiir,wmt)
       Use modmain
       Use modinput
       Use modgw, only : kqset,Gkqset, kset, nomax, numin, ikvbm, ikcbm, ikvcm, Gset
       Use modmpi, only : rank
-      use mod_fock_mt, only: fock_mt_on, nfmax, napwf, apw2f, nlof, lo2f
+      use mod_fock_mt, only: nfmax, napwf, apw2f, nlof, lo2f
       Implicit None
 ! arguments
       Integer, Intent (In) :: ikp
       Complex (8), Intent (In) :: vnlvv (nstsv, nstsv)
       Complex (8), Intent (In) :: vxpsiir (ngkmax, nstsv)
-      Complex (8), Intent (In) :: vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv)
-! WP3: projections of vxpsimt onto the sphere functions (FockExchange; used if fock_mt_on)
+! WP3: muffin-tin part of V_x psi_n, projected onto the sphere functions (FockExchange)
       Complex (8), Intent (In) :: wmt (max(1,nfmax), natmtot, nstsv)
 
 ! local variables
@@ -63,19 +62,10 @@ Subroutine calcACE (ikp, vnlvv, vxpsiir,vxpsimt,wmt)
       Complex (8), Allocatable :: zvcltp (:, :)
       Complex (8), Allocatable :: zfmt (:, :)
       Complex (8), Allocatable :: matrixl(:, :)
-      Complex (8), Allocatable :: matrixm(:, :)
-      Complex (8), Allocatable :: matrixm1(:, :)
-      Complex (8), Allocatable :: matrixm2(:, :)
       Complex (8), Allocatable :: hfxiir(:, :)
-      Complex (8), Allocatable :: hfximt(:, :, :, :)
       Complex (8), Allocatable :: zfft(:)
-      Complex (8) :: fr
-      Real (8), Allocatable :: cf(:,:), frre (:), frim(:), gr(:)
-      Real (8) :: xiintegralre, xiintegralim
       Complex (8), Allocatable :: xiintegral (:, :)
       Complex (8), Allocatable :: apwi(:, :)
-      Complex (8), Allocatable :: matrixPC(:, :)
-      type (WFType) :: wf1,wf2,prod,pot
 ! external functions
       Complex (8) zfinp, zfmtinp
       External zfinp, zfmtinp
@@ -84,32 +74,24 @@ Subroutine calcACE (ikp, vnlvv, vxpsiir,vxpsimt,wmt)
       complex(8), allocatable :: work(:)
       complex(8), allocatable ::  diag(:,:), matrixl1(:,:)
       real(8), allocatable :: rwork(:), eigvals(:)
-! WP3 step 3.1: hfxw = wmt . matrixl^H (coefficient form of hfximt), the APW and LO
-! integrals and pace from it, and the comparison with the fderiv path
-      complex(8), allocatable :: hfxw(:,:,:), xinew(:,:), pacenew(:,:)
-      integer :: lo0, ilom
-      real(8) :: dxi(2), dlo(2), dpace(2)
+! WP3: hfxw = wmt . matrixl^H, the MT part of the ACE vectors in coefficient space
+      complex(8), allocatable :: hfxw(:,:,:)
+      integer :: ilom
 
 
 
 
 ! -- Adaptively Compressed Exchange Operator starts --
       Allocate (matrixl(nstsv,nstsv))
-      Allocate (matrixm(nstsv,nstsv))
-      Allocate (matrixm1(nstsv,nstsv))
-      Allocate (matrixm2(nstsv,nstsv))
       Allocate (hfxiir(ngkmax,nstsv))
-      Allocate (hfximt(lmmaxvr, nrcmtmax, natmtot, nstsv))
 
       if (.not.(allocated(pace))) then
         Allocate (pace(nstsv, nmatmax, nkpt))
         pace=zzero
       endif
-      Allocate (cf (3, nrmtmax), frre(nrmtmax), frim(nrmtmax), gr(nrmtmax))
       Allocate (xiintegral(nstsv,haaijSize))
       Allocate (apwalm(ngkmax, apwordmax, lmmaxapw, natmtot))
       Allocate (apwi(haaijSize,ngkmax))
-      Allocate (matrixPC(nstsv,nstfv))
 
 matrixl = -vnlvv ! create copy
 
@@ -160,192 +142,57 @@ End Do
         Call zgemm('N','C',ngkmax,nstsv,nstsv,(1.0D0,0.0),vxpsiir,ngkmax,matrixl,nstsv,(0.0D0,0.0),hfxiir,ngkmax) ! compute IR part of ACEO   hfxiir=zvclir*matrixl+
 
 
-Do ilm = 1, lmmaxvr
-    Do irc = 1, nrcmtmax
-        Call zgemm('N','C', natmtot, nstsv, nstsv, (1.0D0,0.0), vxpsimt(ilm,irc,:,:), natmtot, matrixl, nstsv, (0.0D0,0.0), hfximt(ilm,irc,:,:), natmtot) ! compute MT part of ACEO
-    End Do
-End Do
-
-if (fock_mt_on) then
-    ! hfxw(f,ias,i) = sum_n wmt(f,ias,n) conj(matrixl(i,n)) = int u_f [hfximt(:,:,ias,i)]_lm(f) r^2 dr
-    Allocate (hfxw(size(wmt,1), natmtot, nstsv))
-    Call zgemm('N','C', size(wmt,1)*natmtot, nstsv, nstsv, zone, wmt, size(wmt,1)*natmtot, &
-               matrixl, nstsv, zzero, hfxw, size(wmt,1)*natmtot)
-    Allocate (xinew(nstsv,haaijSize), pacenew(nstsv,nmatmax))
-    pacenew = zzero
-    dxi = 0.d0; dlo = 0.d0; dpace = 0.d0
-endif
+! WP3: hfxw(f,ias,i) = sum_n wmt(f,ias,n) conj(matrixl(i,n)) = int u_f(r) [hfxi_i]_lm(f)(r) r^2 dr,
+! the muffin-tin part of the ACE vectors projected onto the sphere functions
+Allocate (hfxw(size(wmt,1), natmtot, nstsv))
+Call zgemm('N','C', size(wmt,1)*natmtot, nstsv, nstsv, zone, wmt, size(wmt,1)*natmtot, &
+           matrixl, nstsv, zzero, hfxw, size(wmt,1)*natmtot)
 
 ! -- calculating IR part of <xi|phi>
 pace(:,:,ikp)=0.d0
 Do ist1 = 1, nstsv
   pace(ist1,1:ngk(1,ikp), ikp) = conjg(hfxiir(1:ngk(1,ikp),ist1))
 End Do
-if (fock_mt_on) pacenew(:,1:ngk(1,ikp)) = pace(:,1:ngk(1,ikp),ikp)
 
 ! -- calculating MT and LO part of <xi|phi>
-! apwi=0
+! The integrals int u conj(hfxi) r^2 dr are conj(hfxw) (apwfr, lofr real); apw2f and lo2f map
+! the APW loop order (l, m, io) and the LO loop order (ilo, m) to the sphere function f.
 Call match (ngk(1, ikp), gkc(:, 1, ikp), tpgkc(:, :, 1, ikp), sfacgk(:, :, 1, ikp), apwalm)
 loindex=0
 Do is = 1, nspecies
-    nr = nrmt (is)
     Do ia = 1, natoms (is)
         ias = idxas (ia, is)
-        lo0 = loindex
         if3=0
         Do l = 0, input%groundstate%lmaxmat
-
-                Do m = -l, l
-            Do io1 = 1, apword (l, is)                
+            Do m = -l, l
+                Do io1 = 1, apword (l, is)
                     lm2 = idxlm (l, m)
-                    ! m2 = mfromlm(lm2)
-                    ! l2 = lfromlm(lm2)
                     if3=if3+1
                     apwi(if3,1:ngk(1,ikp))=apwalm(1:ngk(1,ikp), io1, lm2, ias)
-                    Do ist2 = 1, nstsv
-                        Do ir = 1, nr
-                            fr=apwfr(ir,1,io1,l,ias)*conjg(hfximt(lm2,ir,ias,ist2)) *spr(ir, is) ** 2 ! r2(ir)=spr(ir, is) ** 2
-                            frre (ir)=dble(fr)
-                            frim (ir)=aimag(fr)
-                        End Do
-                        Call fderiv (-1, nr, spr(:, is), frre, gr, cf)
-                        xiintegralre=gr (nr) ! real part
-                        Call fderiv (-1, nr, spr(:, is), frim, gr, cf)
-                        xiintegralim=gr (nr) ! imag part
-                        xiintegral (ist2,if3)=dcmplx(xiintegralre,xiintegralim) ! nāk klāt is un ia
-                    End Do
                 End Do
             End Do
         End Do
-! calculate LO part
-        Do ilo= 1, nlorb(is)
-            l = lorbl (ilo, is)
-            Do m = -l, l
-                    lm2 = idxlm (l, m)
-                    loindex=loindex+1
-                    Do ist2 = 1, nstsv
-                        Do ir = 1, nr
-                            fr=lofr(ir,1,ilo,ias)*conjg(hfximt(lm2,ir,ias,ist2)) *spr(ir, is) ** 2 ! r2(ir)=spr(ir, is) ** 2
-                            frre (ir)=dble(fr)
-                            frim (ir)=aimag(fr)
-                        End Do
-                        Call fderiv (-1, nr, spr(:, is), frre, gr, cf)
-                        xiintegralre=gr (nr) ! real part
-                        Call fderiv (-1, nr, spr(:, is), frim, gr, cf)
-                        xiintegralim=gr (nr) ! imag part
-!                        if(pace (ist2,loindex+ngk(1,ikp),ikp) .ne. 0.0) write(*,*) 'paceLO not zero'
-                        pace (ist2,loindex+ngk(1,ikp),ikp)= pace (ist2,loindex+ngk(1,ikp),ikp)+dcmplx(xiintegralre,xiintegralim) ! paceLO
-                        !write(*,*) gr(1), gr(nr), gr(150), gr(151)
-                    End Do
-            End Do
-        End Do ! LO
-        Call zgemm('N', 'N', nstsv, ngk(1,ikp), if3, dcmplx(1.0D0,0.0), xiintegral, nstsv, apwi, haaijSize, dcmplx(1.0D0,0.0), pace(:,:,ikp), nstsv) ! pace= paceMT+pace(IR+LO) = xiintegral*apwi+ pace
-        if (fock_mt_on) then
-            ! WP3 step 3.1: the same integrals from hfxw (apwfr, lofr real, so the integral
-            ! of u conj(hfximt) r^2 is conj(hfxw)); apw2f, lo2f map calcACE's loop orders to f
-            if (if3 /= napwf(is) .or. loindex - lo0 /= nlof(is)) then
-                write(*,'("Error(calcACE): APW/LO count differs from mod_fock_mt maps")')
-                stop
-            end if
-            Do if3 = 1, napwf(is)
-                xinew(:,if3) = conjg(hfxw(apw2f(if3,is),ias,:))
-                Do ist2 = 1, nstsv
-                    dxi(1) = max(dxi(1), abs(xinew(ist2,if3) - xiintegral(ist2,if3)))
-                    dxi(2) = max(dxi(2), abs(xiintegral(ist2,if3)))
-                End Do
-            End Do
-            Do ilom = 1, loindex - lo0
-                Do ist2 = 1, nstsv
-                    zt1 = conjg(hfxw(lo2f(ilom,is),ias,ist2))
-                    ! old value: pace(ist2,lo0+ilom+ngk,ikp) as set by the LO loop above
-                    dlo(1) = max(dlo(1), abs(zt1 - pace(ist2,lo0+ilom+ngk(1,ikp),ikp)))
-                    dlo(2) = max(dlo(2), abs(pace(ist2,lo0+ilom+ngk(1,ikp),ikp)))
-                    pacenew(ist2,lo0+ilom+ngk(1,ikp)) = zt1
-                End Do
-            End Do
-            Call zgemm('N', 'N', nstsv, ngk(1,ikp), napwf(is), zone, xinew, nstsv, apwi, haaijSize, &
-                       zone, pacenew, nstsv)
-        endif
+        if (if3 /= napwf(is) .or. sum(2*lorbl(1:nlorb(is),is)+1) /= nlof(is)) then
+            write(*,'("Error(calcACE): APW/LO count differs from mod_fock_mt maps")')
+            stop
+        end if
+        Do if3 = 1, napwf(is)
+            xiintegral(:,if3) = conjg(hfxw(apw2f(if3,is),ias,:))
+        End Do
+        ! LO part; loindex runs on over atoms, lo2f counts per atom
+        Do ilom = 1, nlof(is)
+            pace(:,loindex+ilom+ngk(1,ikp),ikp) = conjg(hfxw(lo2f(ilom,is),ias,:))
+        End Do
+        loindex = loindex + nlof(is)
+        Call zgemm('N', 'N', nstsv, ngk(1,ikp), napwf(is), zone, xiintegral, nstsv, apwi, haaijSize, &
+                   zone, pace(:,:,ikp), nstsv) ! pace = paceMT + pace(IR+LO) = xiintegral*apwi + pace
     End Do
 End Do
 
-if (fock_mt_on) then
-    ! compare over all columns of pace, then use the coefficient-path result
-    Do ist1 = 1, nmatmax
-        Do ist2 = 1, nstsv
-            dpace(1) = max(dpace(1), abs(pacenew(ist2,ist1) - pace(ist2,ist1,ikp)))
-            dpace(2) = max(dpace(2), abs(pace(ist2,ist1,ikp)))
-        End Do
-    End Do
-    write(*,'("fock_mt 3.1 ikp",i5,": pace rel. diff = ",es10.2,", APW integrals ",es10.2,", LO integrals ",es10.2)') &
-        ikp, dpace(1)/max(dpace(2),tiny(1d0)), dxi(1)/max(dxi(2),tiny(1d0)), dlo(1)/max(dlo(2),tiny(1d0))
-    pace(:,:,ikp) = pacenew
-    Deallocate (hfxw, xinew, pacenew)
-endif
-
-!! -- Adaptively Compressed Exchange Operator test
-if (.false.) then
-if (rank==0) then
-    Allocate (evecfv(nmatmax, nstfv))
-    Call getevecfv (vkl(:, ikp), vgkl(:, :, :, ikp), evecfv)
-    call WFInit(wf1)
-    call genWF(ikp,wf1)
-    call genWFinMT(wf1)    
-! test pace
-    Call zgemm('N', 'N', nstsv, nstfv, nmat(1,ikp), dcmplx(1.0D0,0.0), pace(:,:,ikp), nstsv, evecfv, nmatmax, dcmplx(0.0D0,0.0), matrixPC, nstsv) ! matrixPC=pace*evecfv
-    Call zgemm('C', 'N', nstfv, nstfv, nstsv, dcmplx(-1.0D0,0.0), matrixPC, nstfv, matrixPC, nstsv, dcmplx(0.0D0,0.0), matrixm2, nstfv) ! matrixM2=-matrixPC^+ * matrixPC
-
-! test hfxi
-    Do ist1 = 1, nstsv
-        Do ist2 = 1, nstsv
-            matrixm1(ist1,ist2) = zfinp(.True., wf1%mtrlm(:,:,:,ist1), hfximt(:,:,:,ist2), wf1%ir(:,ist1), hfxiir(:,ist2)) ! matrixM1=<phi|hfxi>
-        End Do
-    End Do
-    Call zgemm('N','C', nstsv, nstsv, nstsv, dcmplx(-1.0D0,0.0), matrixm1, nstsv, matrixm1, nstsv, dcmplx(0.0D0,0.0), matrixm, nstsv) ! matrixM=-matrixM1 * matrixM1^+
-
-! matrix print compare
-    write(*,*) 'ikp=',ikp
-    write(*,*) 'matrixm2 real (pace)'
-      do ist1 = 1, 12
-        write(*,'(12F13.9)') dble(matrixm2(ist1,1:12))
-      end do
-
-    write(*,*) 'matrixm1 real (hfxi)'
-      do ist1 = 1, 12
-        write(*,'(12F13.9)') dble(matrixm(ist1,1:12))
-      end do
-
-    write(*,*) 'matrixm real (vnlvv)'
-      do ist1 = 1, 12
-        write(*,'(12F13.9)') dble(vnlvv(ist1,1:12))
-      end do
-
-    write(*,*) 'matrixm2 imag (pace)'
-      do ist1 = 1, 12
-        write(*,'(12F13.9)') dimag(matrixm2(ist1,1:12))
-      end do
-
-    write(*,*) 'matrixm2 imag (hfxi)'
-      do ist1 = 1, 12
-        write(*,'(12F13.9)') dimag(matrixm(ist1,1:12))
-      end do
-
-    write(*,*) 'matrixm imag (vnlvv)'
-      do ist1 = 1, 12
-        write(*,'(12F13.9)') dimag(vnlvv(ist1,1:12))
-      end do
-    write(*,*) '--------------'
-     deallocate(evecfv)
-     call WFRelease(wf1)
-endif
-endif
-
-  Deallocate (matrixl, matrixm, matrixm1, matrixm2)
-  Deallocate (hfxiir,hfximt)
-  Deallocate(cf,frre,frim,gr)
+  Deallocate (matrixl, hfxw)
+  Deallocate (hfxiir)
   Deallocate(xiintegral)
   Deallocate (apwi,apwalm)
-  Deallocate (matrixPC)
 
 
 !-- Adaptively Compressed Exchange Operator ends --

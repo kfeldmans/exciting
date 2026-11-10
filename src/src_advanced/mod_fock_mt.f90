@@ -1,6 +1,7 @@
 ! Coefficient-space Fock exchange inside the muffin-tin spheres
-! (WP3 of research-log/handoff-plan-claude-work.md). Step 3.0: infrastructure only;
-! nothing here changes the results of the existing path.
+! (WP3 of research-log/handoff-plan-claude-work.md). Since step 3.5 FockExchange and
+! calcACE work only with the projections W(f,ias,n) built from these tables; calc_vxnl
+! stops if an assumption of fock_mt_assumptions_ok is not met.
 !
 ! Sphere functions f of species is are numbered in the order of wf%mtordered
 ! (orderwf.f90): the radial functions irad = 1..nradial(is) in the order of mod_radial's
@@ -57,9 +58,7 @@ module mod_fock_mt
   real(8), allocatable, public :: Tpb2(:,:,:)                              ! (irad,p,ias)
   type(non_zero_gaunt_real), public :: gnt_mt
 
-  logical :: selftest_done = .false.
-
-  public :: fock_mt_assumptions_ok, init_fock_mt, release_fock_mt, project_mt, fock_mt_selftest
+  public :: fock_mt_assumptions_ok, init_fock_mt, release_fock_mt, project_mt
 
 contains
 
@@ -120,7 +119,7 @@ contains
     call timesec(ta)
     call release_fock_mt
     if (.not. fock_mt_assumptions_ok(.true.)) then
-      write(*,'("Info(mod_fock_mt): coefficient-space path off; the old path is used")')
+      write(*,'("Info(mod_fock_mt): coefficient-space path off (calc_vxnl stops)")')
       return
     end if
     lmax = input%groundstate%lmaxapw
@@ -349,164 +348,5 @@ contains
       end do
     end do
   end subroutine project_mt
-
-
-  !> One-time check of the maps and tables against independent references (temporary,
-  !> removed with the comparison prints of WP3). wf needs mt, mtordered, mtrlm, mtmesh.
-  !> Printed numbers are max|new - ref| / max|ref| unless said otherwise.
-  subroutine fock_mt_selftest(wf)
-    use modinput, only: input
-    use mod_APW_LO, only: apword, nlorb, lorbl, apwfr, lofr
-    use mod_atoms, only: nspecies, natoms, idxas, spr
-    use mod_muffin_tin, only: nrmt, nrmtmax, rmt, lmmaxvr, ntpll
-    use mod_SHT, only: zbshthf, zfshthf
-    use mod_eigensystem, only: WFType
-    use mod_eigenvalue_occupancy, only: nstsv
-    use constants, only: zzero, zone
-    type(WFType), intent(in) :: wf
-
-    integer :: is, ia, ias, ir, nr, l, m, io, ilo, if3, ilom, f, f2, n, p, i, lm, lm1, lm3, lmb, ll, nst
-    real(8) :: dmap, dnum(2), d(2), dl(2,0:50), ta, tb
-    real(8), allocatable :: rl(:,:)
-    complex(8), allocatable :: zf(:,:), w1(:), w2(:), wc(:,:), zmesh(:,:), zprod(:,:)
-
-    if (selftest_done .or. .not. fock_mt_on) return
-    selftest_done = .true.
-    call timesec(ta)
-    allocate(zf(lmmaxvr,nrmtmax), w1(nfmax), w2(nfmax), wc(nfmax,lmmaxvr))
-    allocate(zmesh(ntpll,nrmtmax), zprod(lmmaxvr,nrmtmax), rl(nrmtmax,0:lmaxpot))
-
-    do is = 1, nspecies
-      if (nfun(is) > size(wf%mtordered,1)) then
-        write(*,'("Error(fock_mt_selftest): nfun > size(wf%mtordered,1)")')
-        stop
-      end if
-    end do
-
-    ! (1) calcACE maps: the radial function f points to must be the same array, bit for bit
-    dmap = 0d0
-    do is = 1, nspecies
-      do ia = 1, natoms(is)
-        ias = idxas(ia,is)
-        nr = nrmt(is)
-        if3 = 0
-        do l = 0, input%groundstate%lmaxmat
-          do m = -l, l
-            do io = 1, apword(l,is)
-              if3 = if3 + 1
-              f = apw2f(if3,is)
-              if (f_l(f,is) /= l .or. f_m(f,is) /= m) dmap = huge(1d0)
-              dmap = max(dmap, maxval(abs(radial(1:nr,f_irad(f,is),ias) - apwfr(1:nr,1,io,l,ias))))
-            end do
-          end do
-        end do
-        ilom = 0
-        do ilo = 1, nlorb(is)
-          l = lorbl(ilo,is)
-          do m = -l, l
-            ilom = ilom + 1
-            f = lo2f(ilom,is)
-            if (f_l(f,is) /= l .or. f_m(f,is) /= m) dmap = huge(1d0)
-            dmap = max(dmap, maxval(abs(radial(1:nr,f_irad(f,is),ias) - lofr(1:nr,1,ilo,ias))))
-          end do
-        end do
-      end do
-    end do
-    write(*,'("fock_mt_selftest (1) calcACE maps, max|u_map - u_calcACE| (must be 0) = ",es10.2)') dmap
-
-    nst = nstsv
-    ! (2) mtordered order vs f map: sum_f C(f) u_f(r) delta(lm, lm(f)) vs wf%mtrlm (genWFinMT)
-    ! (3) project_mt vs Rb(L=0):  project_mt(wf%mtrlm)(f) vs sum_f' Rb(irad,0,irad') C(f') delta(lm,lm')
-    ! (4) Tpb2 vs project_mt of productbasis2_p placed in every lm
-    dnum = 0d0; d = 0d0
-    dl = 0d0
-    do is = 1, nspecies
-      nr = nrmt(is)
-      do ia = 1, natoms(is)
-        ias = idxas(ia,is)
-        do n = 1, nst
-          zf = zzero
-          do f = 1, nfun(is)
-            lm = f_lm(f,is)
-            zf(lm,1:nr) = zf(lm,1:nr) + wf%mtordered(f,n,ias)*radial(1:nr,f_irad(f,is),ias)
-          end do
-          dnum(1) = max(dnum(1), maxval(abs(zf(:,1:nr) - wf%mtrlm(:,1:nr,ias,n))))
-          dnum(2) = max(dnum(2), maxval(abs(wf%mtrlm(:,1:nr,ias,n))))
-          call project_mt(is, ias, wf%mtrlm(:,:,ias,n), w1)
-          w2 = zzero
-          do f = 1, nfun(is)
-            do f2 = 1, nfun(is)
-              if (f_lm(f2,is) == f_lm(f,is)) w2(f) = w2(f) + &
-                Rb(f_irad(f,is),0,f_irad(f2,is),ias)*wf%mtordered(f2,n,ias)
-            end do
-          end do
-          d(1) = max(d(1), maxval(abs(w1(1:nfun(is)) - w2(1:nfun(is)))))
-          d(2) = max(d(2), maxval(abs(w2(1:nfun(is)))))
-        end do
-        do p = 1, npbf2(0,ias)
-          do ir = 1, nr
-            zf(:,ir) = productbasis2(ir,p,0,ias)
-          end do
-          call project_mt(is, ias, zf, w1)
-          do f = 1, nfun(is)
-            dl(1,0) = max(dl(1,0), abs(w1(f) - Tpb2(f_irad(f,is),p,ias)))
-            dl(2,0) = max(dl(2,0), abs(Tpb2(f_irad(f,is),p,ias)))
-          end do
-        end do
-      end do
-    end do
-    write(*,'("fock_mt_selftest (2) mtordered vs mtrlm, rel. diff = ",es10.2)') dnum(1)/dnum(2)
-    write(*,'("fock_mt_selftest (3) project_mt vs Rb(L=0), rel. diff = ",es10.2)') d(1)/d(2)
-    write(*,'("fock_mt_selftest (4) project_mt vs Tpb2, rel. diff = ",es10.2)') dl(1,0)/dl(2,0)
-
-    ! (5) Gaunt + Rb vs the angular mesh, for the potential (r/R)^L Y_LM times psi_n:
-    !     mesh: zfshthf . [ psi_n(mesh) Y_LM(mesh) (r/R)^L ], then project_mt
-    !     coefficients: sum_f' <Y_lm(f)|Y_LM|Y_lm(f')> Rb(irad(f),L,irad(f'),ias) C(f')
-    !     First atom of each species, states 1..min(2,nstsv). Expected: round-off where
-    !     the mesh integrates degree l + L + l' exactly, mesh error above.
-    dl = 0d0
-    do is = 1, nspecies
-      ias = idxas(1,is)
-      nr = nrmt(is)
-      rl(1:nr,0) = 1d0
-      do ll = 1, lmaxpot
-        rl(1:nr,ll) = rl(1:nr,ll-1)*(spr(1:nr,is)/rmt(is))
-      end do
-      do n = 1, min(2,nstsv)
-        wc = zzero
-        do f = 1, nfun(is)
-          lm1 = f_lm(f,is)
-          do f2 = 1, nfun(is)
-            lm3 = f_lm(f2,is)
-            do i = 1, gnt_mt%num(lm1,lm3)
-              lmb = gnt_mt%lm2(i,lm1,lm3)
-              wc(f,lmb) = wc(f,lmb) + gnt_mt%val(i,lm1,lm3) &
-                * Rb(f_irad(f,is),l_of_lm(lmb),f_irad(f2,is),ias)*wf%mtordered(f2,n,ias)
-            end do
-          end do
-        end do
-        do lmb = 1, lmmaxvr
-          ll = l_of_lm(lmb)
-          do ir = 1, nr
-            zmesh(:,ir) = wf%mtmesh(:,ir,ias,n)*zbshthf(:,lmb)*rl(ir,ll)
-          end do
-          call zgemm('N', 'N', lmmaxvr, nr, ntpll, zone, zfshthf, lmmaxvr, zmesh, ntpll, &
-                     zzero, zprod, lmmaxvr)
-          call project_mt(is, ias, zprod, w1)
-          dl(1,ll) = max(dl(1,ll), maxval(abs(w1(1:nfun(is)) - wc(1:nfun(is),lmb))))
-          dl(2,ll) = max(dl(2,ll), maxval(abs(w1(1:nfun(is)))))
-        end do
-      end do
-    end do
-    write(*,'("fock_mt_selftest (5) Gaunt+Rb vs mesh (ntpll =",i5,"), rel. diff per L:")') ntpll
-    do ll = 0, lmaxpot
-      write(*,'("fock_mt_selftest (5)   L =",i3,"  rel. diff = ",es10.2,"  max|W| = ",es10.2)') &
-        ll, dl(1,ll)/max(dl(2,ll),tiny(1d0)), dl(2,ll)
-    end do
-
-    deallocate(zf, w1, w2, wc, zmesh, zprod, rl)
-    call timesec(tb)
-    write(*,'("fock_mt_selftest time (s) = ",f10.3)') tb - ta
-  end subroutine fock_mt_selftest
 
 end module mod_fock_mt

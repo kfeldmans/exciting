@@ -698,12 +698,12 @@ real(dp), intent(in) :: jlgpr(0:,:,:)
 complex(dp), intent(in) :: ylmgp(:,:)
 !> structure factors \({\rm e}^{{\rm i} ({\bf G+p}) \cdot {\bf \tau}_\alpha}\)
 complex(dp), intent(in) :: sfacgp(:,:)
-!> complex muffin-tin charge density
-complex(dp), intent(in) :: zrhomt(:,:,:)
+!> complex muffin-tin charge density (optional since WP3 step 3.5: only the Yukawa branch reads it)
+complex(dp), optional, intent(in) :: zrhomt(:,:,:)
 !> complex interstitial charge density
 complex(dp), intent(In) :: zrhoir(:)
-!> complex muffin-tin Coulomb potential
-complex(dp), intent(out) :: zvclmt(:,:,:) ! lm, nrmax, natoms
+!> complex muffin-tin Coulomb potential (optional since WP3 step 3.5: required unless vbound is present)
+complex(dp), optional, intent(out) :: zvclmt(:,:,:) ! lm, nrmax, natoms
 !> complex interstitial Coulomb potential
 complex(dp), intent(out) :: zvclir(:)
 !> Fourier component of pseudocharge density for shortest \({\bf G+p}\) vector
@@ -773,6 +773,14 @@ rpseudo=rpseudo_in
 else
 rpseudo=.false.
 endif
+
+if ((.not.present(vbound) .or. yukawa) .and. .not.(present(zrhomt) .and. present(zvclmt))) then
+  write(*,*)
+  write(*,'("Error(coulomb_potential3): zrhomt and zvclmt are required unless vbound is present")')
+  write(*,'(" (Coulomb path)")')
+  write(*,*)
+  stop
+end if
 
 
 allocate( qlm( lmmaxvr, natmtot),qlmir( lmmaxvr, natmtot))
