@@ -110,6 +110,10 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
 ! wbd_old = project_mt of the old per-pair prodshrs2 result, summed over m and q (temporary, until 3.5)
       Complex (8), Allocatable :: vbs (:, :, :), xvb (:, :), wbd_new (:, :, :), wbd_old (:, :, :)
       Integer, Allocatable :: is_of_ias (:)
+! WP3 step 3.4: core-valence term in coefficients. wcv_new(f,ias,n) = project_mt of zfmt1 in the vcv
+! block; wcv_old = project_mt(vxpsimt) - wpb_old - wbd_old (temporary, until 3.5)
+      Complex (8), Allocatable :: wcv_new (:, :, :), wcv_old (:, :, :)
+      Real (8) :: dcv(2)
       Integer :: ifn2, igt, lm1, lm3, lmb, irad1, irad2
       Complex (8) :: zsum
       Real (8) :: dbd(2), time_vb
@@ -212,6 +216,9 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
         Allocate (wbd_new(max(1,nfmax), natmtot, nstsv), wbd_old(max(1,nfmax), natmtot, nstsv))
         wbd_new (:, :, :) = 0.d0
         wbd_old (:, :, :) = 0.d0
+        Allocate (wcv_new(max(1,nfmax), natmtot, nstsv), wcv_old(max(1,nfmax), natmtot, nstsv))
+        wcv_new (:, :, :) = 0.d0
+        wcv_old (:, :, :) = 0.d0
         Allocate (is_of_ias(natmtot))
         Do is = 1, nspecies
           Do ia = 1, natoms (is)
@@ -952,6 +959,9 @@ call timesec(ta)
 !$OMP CRITICAL
               vxpsimt(:,:,ias,ist3)=vxpsimt(:,:,ias,ist3)+zfmt1 !rod%mtrlm(:,:,:,1)*wkptnr(jk)
 !$OMP END CRITICAL
+              ! WP3 step 3.4: the same term projected onto the sphere functions. Each (ias, ist3)
+              ! is visited exactly once (ist3 work-shared, ias fixed here), so one writer, no CRITICAL.
+              if (fock_mt_on) call project_mt(is, ias, zfmt1, wcv_new(:,ias,ist3))
 
             End Do ! ist3
 !$OMP END DO
@@ -975,6 +985,8 @@ if (print_times) write(*,*) 'vcv :',tb-ta
 ! goes away with vxpsimt in 3.5).
 ! WP3 step 3.3: the boundary term comes from wbd_new; its old version wbd_old is subtracted too,
 ! so that project_mt(vxpsimt) - wpb_old - wbd_old is the core-valence term only.
+! WP3 step 3.4: that difference is now only wcv_old, for the comparison with wcv_new; wmt is
+! assembled from the three new terms (product basis, boundary, core-valence) alone.
       if (fock_mt_on) then
         call timesec(ta)
         dpb(1) = maxval(abs(wmt - wpb_old))
@@ -987,12 +999,16 @@ if (print_times) write(*,*) 'vcv :',tb-ta
             Do ia = 1, natoms (is)
               ias = idxas (ia, is)
               call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wtmp)
-              wmt(:,ias,ist3) = wmt(:,ias,ist3) + wbd_new(:,ias,ist3) &
-                + (wtmp(:) - wpb_old(:,ias,ist3) - wbd_old(:,ias,ist3))
+              wcv_old(:,ias,ist3) = wtmp(:) - wpb_old(:,ias,ist3) - wbd_old(:,ias,ist3)
+              wmt(:,ias,ist3) = wmt(:,ias,ist3) + wbd_new(:,ias,ist3) + wcv_new(:,ias,ist3)
             End Do
           End Do
         End Do
-        Deallocate (wtmp, wpb_old, wbd_new, wbd_old, is_of_ias)
+        dcv(1) = maxval(abs(wcv_new - wcv_old))
+        dcv(2) = maxval(abs(wcv_old))
+        write(*,'("fock_mt 3.4 ikp",i5,": core-valence term rel. diff = ",es10.2,", max|old| = ",es10.2)') &
+          ikp, dcv(1)/max(dcv(2),tiny(1d0)), dcv(2)
+        Deallocate (wtmp, wpb_old, wbd_new, wbd_old, wcv_new, wcv_old, is_of_ias)
         Allocate (vnlmt_w(nstsv, nstsv))
         vnlmt_w (:, :) = zzero
         Do is = 1, nspecies
