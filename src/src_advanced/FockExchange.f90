@@ -32,7 +32,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       Complex (8), Intent (Out) :: vnlvv (nstsv, nstsv)
       Complex (8), Intent (Out) :: vxpsiirgk (ngkmax, nstsv)
       Complex (8), Intent (Out) :: vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv)
-! WP3: wmt(f, ias, n) = int u_f(r) [vxpsimt(:,:,ias,n)]_lm(f)(r) r^2 dr (integ_v weights),
+! WP3: wmt(f, ias, n) = int u_f(r) [vxpsimt(:,:,ias,n)]_lm(f)(r) r^2 dr (fderiv spline weights),
 ! f in the order of wf%mtordered; filled only when fock_mt_on
       Complex (8), Intent (Out) :: wmt (max(1,nfmax), natmtot, nstsv)
 
@@ -842,8 +842,8 @@ if (print_times) write(*,*) 'vcv :',tb-ta
 
 ! WP3 step 3.1: project vxpsimt onto the sphere functions, and the MT part of vnlvv
 ! from the coefficients: vnlmt_w(ist1,ist3) = sum_{ias,f} conj(C(f,ist1,ias)) wmt(f,ias,ist3),
-! C = wf1%mtordered. Same as zfinpmt below except for the radial quadrature (integ_v
-! weights here, fderiv splines there). The q0corr term (singularity = exc) is not on
+! C = wf1%mtordered. Same as zfinpmt below, with the spline weights of fderiv
+! (mod_fock_mt wspl), so equal up to round-off. The q0corr term (singularity = exc) is not on
 ! this path (fock_mt_on requires exc0d).
       if (fock_mt_on) then
         call timesec(ta)

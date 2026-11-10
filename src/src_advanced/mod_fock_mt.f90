@@ -14,9 +14,15 @@
 !   lo2f(ilom,is): LO loop   ilo = 1..nlorb(is), m = -l..l  (counter per atom; calcACE's
 !                  loindex runs on over atoms, so loindex = (LOs of earlier atoms) + ilom)
 !
-! Tables, built once per run next to mod_radial's tables (same guard as WP2), with the
-! integ_v weights mt_integw%intw:
-!   uwr(ir,irad,ias)      = intw(ir,is) r^2 u_irad(r)
+! Radial quadrature (Kristaps 11-10, gate 3.1): the spline weights of fderiv, so that
+! the coefficient path reproduces the old fderiv integrals (calcACE, zfmtinp) and the
+! normalisation of the radial functions (genapwfr, genlofr). fderiv(-1) is linear in
+! its data (clamped spline, src_lib/spline.f90), so int_0^R f dr = sum_ir wspl(ir,is) f(ir)
+! with wspl(ir,is) = fderiv(-1) of the unit vector e_ir, taken at R. init_fock_mt prints
+! the check against fderiv for u_irad^2 r^2.
+!
+! Tables, built once per run next to mod_radial's tables (same guard as WP2), with wspl:
+!   uwr(ir,irad,ias)      = wspl(ir,is) r^2 u_irad(r)
 !   Rb(irad,L,jrad,ias)   = int u_irad (r/R_alpha)^L u_jrad r^2 dr,  L = 0..lmaxvr
 !   Tpb2(irad,p,ias)      = int u_irad productbasis2_p r^2 dr,      p = 1..npbf2(0,ias)
 !   gnt_mt                = <Y_lm | Y_LM | Y_l'm'> = int conj(Y_lm) Y_LM Y_l'm' dOmega
@@ -45,6 +51,7 @@ module mod_fock_mt
   integer, allocatable, public :: napwf(:), apw2f(:,:)                     ! (is), (if3,is)
   integer, allocatable, public :: nlof(:), lo2f(:,:)                       ! (is), (ilom,is)
   integer, allocatable, public :: l_of_lm(:)                               ! (lm)
+  real(8), allocatable, public :: wspl(:,:)                                ! (ir,is)
   real(8), allocatable, public :: uwr(:,:,:)                               ! (ir,irad,ias)
   real(8), allocatable, public :: Rb(:,:,:,:)                              ! (irad,0:L,jrad,ias)
   real(8), allocatable, public :: Tpb2(:,:,:)                              ! (irad,p,ias)
@@ -105,11 +112,10 @@ contains
     use mod_APW_LO, only: apword, apwordmax, nlorb, lorbl
     use mod_atoms, only: nspecies, natoms, natmtot, idxas, spr
     use mod_muffin_tin, only: nrmt, nrmtmax, rmt, idxlm, lmmaxvr
-    use modinteg, only: integ_v, mt_integw
-    integer :: is, ia, ias, irad, jrad, l, m, io, ilo, f, if3, ilom, nr, p, nf, lmax, ll, lm
+    integer :: is, ia, ias, irad, jrad, l, m, io, ilo, f, if3, ilom, nr, p, nf, lmax, ll, lm, ir
     integer, allocatable :: irad_apw(:,:), irad_lo(:)
-    real(8), allocatable :: r2(:), rl(:), f1(:)
-    real(8) :: ta, tb, mb
+    real(8), allocatable :: r2(:), rl(:), f1(:), gr(:), cf(:,:)
+    real(8) :: ta, tb, mb, dw(2)
 
     call timesec(ta)
     call release_fock_mt
@@ -211,18 +217,44 @@ contains
     end do
     deallocate(irad_apw, irad_lo)
 
+    ! --- spline weights of fderiv(-1): wspl(ir,is) = integral of the unit vector e_ir
+    allocate(wspl(nrmtmax,nspecies), gr(nrmtmax), cf(3,nrmtmax))
+    allocate(r2(nrmtmax), rl(nrmtmax), f1(nrmtmax))
+    wspl = 0d0
+    do is = 1, nspecies
+      nr = nrmt(is)
+      do ir = 1, nr
+        f1(1:nr) = 0d0
+        f1(ir) = 1d0
+        call fderiv(-1, nr, spr(:,is), f1, gr, cf)
+        wspl(ir,is) = gr(nr)
+      end do
+    end do
+    ! check: sum wspl u^2 r^2 vs fderiv for every radial function of the first atom
+    dw = 0d0
+    do is = 1, nspecies
+      nr = nrmt(is)
+      ias = idxas(1,is)
+      do irad = 1, nradial(is)
+        f1(1:nr) = radial(1:nr,irad,ias)**2*spr(1:nr,is)**2
+        call fderiv(-1, nr, spr(:,is), f1, gr, cf)
+        dw(1) = max(dw(1), abs(dot_product(wspl(1:nr,is), f1(1:nr)) - gr(nr)))
+        dw(2) = max(dw(2), abs(gr(nr)))
+      end do
+    end do
+    write(*,'("Info(mod_fock_mt): spline weights vs fderiv, max rel. diff = ",es10.2)') dw(1)/dw(2)
+
     ! --- radial tables
     allocate(uwr(nrmtmax,maxradial,natmtot), Rb(maxradial,0:lmaxpot,maxradial,natmtot))
     allocate(Tpb2(maxradial,max(1,maxpbf2),natmtot))
     uwr = 0d0; Rb = 0d0; Tpb2 = 0d0
-    allocate(r2(nrmtmax), rl(nrmtmax), f1(nrmtmax))
     do is = 1, nspecies
       nr = nrmt(is)
       r2(1:nr) = spr(1:nr,is)**2
       do ia = 1, natoms(is)
         ias = idxas(ia,is)
         do irad = 1, nradial(is)
-          uwr(1:nr,irad,ias) = mt_integw%intw(1:nr,is)*r2(1:nr)*radial(1:nr,irad,ias)
+          uwr(1:nr,irad,ias) = wspl(1:nr,is)*r2(1:nr)*radial(1:nr,irad,ias)
         end do
         ! (r/R)^L as in match_bound_mt2 (weinert.f90): repeated multiplication by r/R
         rl(1:nr) = 1d0
@@ -230,7 +262,7 @@ contains
           do jrad = 1, nradial(is)
             do irad = 1, nradial(is)
               f1(1:nr) = radial(1:nr,irad,ias)*rl(1:nr)*radial(1:nr,jrad,ias)*r2(1:nr)
-              call integ_v(nr, is, f1, Rb(irad,ll,jrad,ias), mt_integw)
+              Rb(irad,ll,jrad,ias) = dot_product(wspl(1:nr,is), f1(1:nr))
             end do
           end do
           rl(1:nr) = rl(1:nr)*(spr(1:nr,is)/rmt(is))
@@ -238,19 +270,19 @@ contains
         do p = 1, npbf2(0,ias)
           do irad = 1, nradial(is)
             f1(1:nr) = radial(1:nr,irad,ias)*productbasis2(1:nr,p,0,ias)*r2(1:nr)
-            call integ_v(nr, is, f1, Tpb2(irad,p,ias), mt_integw)
+            Tpb2(irad,p,ias) = dot_product(wspl(1:nr,is), f1(1:nr))
           end do
         end do
       end do
     end do
-    deallocate(r2, rl, f1)
+    deallocate(r2, rl, f1, gr, cf)
 
     ! --- Gaunt table <Y_lm | Y_LM | Y_l'm'>
     gnt_mt = non_zero_gaunt_yyy(lmax, lmaxpot, lmax)
 
     fock_mt_on = .true.
     call timesec(tb)
-    mb = 8d0*(size(uwr) + size(Rb) + size(Tpb2) + size(gnt_mt%val))/1d6 &
+    mb = 8d0*(size(wspl) + size(uwr) + size(Rb) + size(Tpb2) + size(gnt_mt%val))/1d6 &
        + 4d0*(size(gnt_mt%lm2) + size(gnt_mt%num))/1d6
     write(*,'("Info(mod_fock_mt): nfun per species ",20i5)') nfun
     write(*,'("Info(mod_fock_mt): APW, LO functions per species ",20(2i5,2x))') &
@@ -283,6 +315,7 @@ contains
     if (allocated(nlof)) deallocate(nlof)
     if (allocated(lo2f)) deallocate(lo2f)
     if (allocated(l_of_lm)) deallocate(l_of_lm)
+    if (allocated(wspl)) deallocate(wspl)
     if (allocated(uwr)) deallocate(uwr)
     if (allocated(Rb)) deallocate(Rb)
     if (allocated(Tpb2)) deallocate(Tpb2)
@@ -296,7 +329,7 @@ contains
 
 
   !> w(f) = int_0^R u_irad(f)(r) zf(lm(f), r) r^2 dr for the sphere functions of atom ias
-  !> of species is, with the integ_v weights. zf(lm, ir) on the muffin-tin grid
+  !> of species is, with the spline weights wspl. zf(lm, ir) on the muffin-tin grid
   !> (nrcmt = nrmt asserted). Only w(1:nfun(is)) is meaningful; the rest is set to zero.
   !> Reads module tables only, so it may be called inside parallel regions.
   subroutine project_mt(is, ias, zf, w)
