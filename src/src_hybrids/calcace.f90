@@ -4,17 +4,20 @@
 ! Copyright (C) 2021 J. Cimurs, A. Gulans
 !
 !
-Subroutine calcACE (ikp, vnlvv, vxpsiir,vxpsimt)
+Subroutine calcACE (ikp, vnlvv, vxpsiir,vxpsimt,wmt)
       Use modmain
       Use modinput
       Use modgw, only : kqset,Gkqset, kset, nomax, numin, ikvbm, ikcbm, ikvcm, Gset
       Use modmpi, only : rank
+      use mod_fock_mt, only: fock_mt_on, nfmax, napwf, apw2f, nlof, lo2f
       Implicit None
 ! arguments
       Integer, Intent (In) :: ikp
       Complex (8), Intent (In) :: vnlvv (nstsv, nstsv)
       Complex (8), Intent (In) :: vxpsiir (ngkmax, nstsv)
       Complex (8), Intent (In) :: vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv)
+! WP3: projections of vxpsimt onto the sphere functions (FockExchange; used if fock_mt_on)
+      Complex (8), Intent (In) :: wmt (max(1,nfmax), natmtot, nstsv)
 
 ! local variables
       Integer :: ngknr, ik, jk, ist1, ist2, ist3, is4
@@ -81,6 +84,11 @@ Subroutine calcACE (ikp, vnlvv, vxpsiir,vxpsimt)
       complex(8), allocatable :: work(:)
       complex(8), allocatable ::  diag(:,:), matrixl1(:,:)
       real(8), allocatable :: rwork(:), eigvals(:)
+! WP3 step 3.1: hfxw = wmt . matrixl^H (coefficient form of hfximt), the APW and LO
+! integrals and pace from it, and the comparison with the fderiv path
+      complex(8), allocatable :: hfxw(:,:,:), xinew(:,:), pacenew(:,:)
+      integer :: lo0, ilom
+      real(8) :: dxi(2), dlo(2), dpace(2)
 
 
 
@@ -158,11 +166,22 @@ Do ilm = 1, lmmaxvr
     End Do
 End Do
 
+if (fock_mt_on) then
+    ! hfxw(f,ias,i) = sum_n wmt(f,ias,n) conj(matrixl(i,n)) = int u_f [hfximt(:,:,ias,i)]_lm(f) r^2 dr
+    Allocate (hfxw(size(wmt,1), natmtot, nstsv))
+    Call zgemm('N','C', size(wmt,1)*natmtot, nstsv, nstsv, zone, wmt, size(wmt,1)*natmtot, &
+               matrixl, nstsv, zzero, hfxw, size(wmt,1)*natmtot)
+    Allocate (xinew(nstsv,haaijSize), pacenew(nstsv,nmatmax))
+    pacenew = zzero
+    dxi = 0.d0; dlo = 0.d0; dpace = 0.d0
+endif
+
 ! -- calculating IR part of <xi|phi>
 pace(:,:,ikp)=0.d0
 Do ist1 = 1, nstsv
   pace(ist1,1:ngk(1,ikp), ikp) = conjg(hfxiir(1:ngk(1,ikp),ist1))
 End Do
+if (fock_mt_on) pacenew(:,1:ngk(1,ikp)) = pace(:,1:ngk(1,ikp),ikp)
 
 ! -- calculating MT and LO part of <xi|phi>
 ! apwi=0
@@ -172,6 +191,7 @@ Do is = 1, nspecies
     nr = nrmt (is)
     Do ia = 1, natoms (is)
         ias = idxas (ia, is)
+        lo0 = loindex
         if3=0
         Do l = 0, input%groundstate%lmaxmat
 
@@ -220,8 +240,48 @@ Do is = 1, nspecies
             End Do
         End Do ! LO
         Call zgemm('N', 'N', nstsv, ngk(1,ikp), if3, dcmplx(1.0D0,0.0), xiintegral, nstsv, apwi, haaijSize, dcmplx(1.0D0,0.0), pace(:,:,ikp), nstsv) ! pace= paceMT+pace(IR+LO) = xiintegral*apwi+ pace
+        if (fock_mt_on) then
+            ! WP3 step 3.1: the same integrals from hfxw (apwfr, lofr real, so the integral
+            ! of u conj(hfximt) r^2 is conj(hfxw)); apw2f, lo2f map calcACE's loop orders to f
+            if (if3 /= napwf(is) .or. loindex - lo0 /= nlof(is)) then
+                write(*,'("Error(calcACE): APW/LO count differs from mod_fock_mt maps")')
+                stop
+            end if
+            Do if3 = 1, napwf(is)
+                xinew(:,if3) = conjg(hfxw(apw2f(if3,is),ias,:))
+                Do ist2 = 1, nstsv
+                    dxi(1) = max(dxi(1), abs(xinew(ist2,if3) - xiintegral(ist2,if3)))
+                    dxi(2) = max(dxi(2), abs(xiintegral(ist2,if3)))
+                End Do
+            End Do
+            Do ilom = 1, loindex - lo0
+                Do ist2 = 1, nstsv
+                    zt1 = conjg(hfxw(lo2f(ilom,is),ias,ist2))
+                    ! old value: pace(ist2,lo0+ilom+ngk,ikp) as set by the LO loop above
+                    dlo(1) = max(dlo(1), abs(zt1 - pace(ist2,lo0+ilom+ngk(1,ikp),ikp)))
+                    dlo(2) = max(dlo(2), abs(pace(ist2,lo0+ilom+ngk(1,ikp),ikp)))
+                    pacenew(ist2,lo0+ilom+ngk(1,ikp)) = zt1
+                End Do
+            End Do
+            Call zgemm('N', 'N', nstsv, ngk(1,ikp), napwf(is), zone, xinew, nstsv, apwi, haaijSize, &
+                       zone, pacenew, nstsv)
+        endif
     End Do
 End Do
+
+if (fock_mt_on) then
+    ! compare over all columns of pace, then use the coefficient-path result
+    Do ist1 = 1, nmatmax
+        Do ist2 = 1, nstsv
+            dpace(1) = max(dpace(1), abs(pacenew(ist2,ist1) - pace(ist2,ist1,ikp)))
+            dpace(2) = max(dpace(2), abs(pace(ist2,ist1,ikp)))
+        End Do
+    End Do
+    write(*,'("fock_mt 3.1 ikp",i5,": pace rel. diff = ",es10.2,", APW integrals ",es10.2,", LO integrals ",es10.2)') &
+        ikp, dpace(1)/max(dpace(2),tiny(1d0)), dxi(1)/max(dxi(2),tiny(1d0)), dlo(1)/max(dlo(2),tiny(1d0))
+    pace(:,:,ikp) = pacenew
+    Deallocate (hfxw, xinew, pacenew)
+endif
 
 !! -- Adaptively Compressed Exchange Operator test
 if (.false.) then

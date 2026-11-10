@@ -13,7 +13,7 @@ subroutine calc_vxnl()
 !
     use modinteg 
     use mod_Feldmans, only: build_B_cache
-    use mod_fock_mt, only: init_fock_mt
+    use mod_fock_mt, only: init_fock_mt, nfmax
 ! !DESCRIPTION:
 !   Calculates the non-local exchange potential
 !   and the non-local exchange energy for Hartree-Fock based hybrid functionals.
@@ -42,6 +42,8 @@ subroutine calc_vxnl()
     logical :: hybrid
 ! allocatables for ACE
     complex(8), allocatable :: vxpsimt (:, :, :, :), vxpsiir(:, :)
+! WP3: projections of vxpsimt onto the sphere functions, wmt(f, ias, n) (mod_fock_mt)
+    complex(8), allocatable :: wmt (:, :, :)
     integer :: lcore
     real(8) ,allocatable :: psi_core(:),vxpsi_core(:)
     real(8) :: t1
@@ -337,6 +339,9 @@ else ! Use oepvnl
 !      call release_radial
 !      stop
 
+      ! WP3: W(f, ias, n), passed from FockExchange to calcACE (size 1 if fock_mt is off)
+      allocate(wmt(max(1,nfmax), natmtot, nstsv))
+
       ! Start to generate B_ik's for FockExchange
         call build_B_cache()
         ! Finish to generate B_ik's for FockExchange
@@ -347,6 +352,7 @@ else ! Use oepvnl
 #endif
         vxpsiir=zzero
         vxpsimt=zzero
+        wmt=zzero
         if (input%groundstate%Hybrid%updateRadial) then        
           !!!!!!!veca baze!!!!!!!
           apwfr=apwfr_old
@@ -355,7 +361,7 @@ else ! Use oepvnl
         endif
         
         call timesec(ta)
-        call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,vxpsimt)
+        call FockExchange (ik, sxs2*kiw(1,ik) ,vxnl(:, :, ik),vxpsiir,vxpsimt,wmt)
         call timesec(tb)
         if (input%groundstate%Hybrid%updateRadial) then 
           !!!!!!!jauna baze!!!!!!!
@@ -373,7 +379,7 @@ else ! Use oepvnl
         end do
 
         call timesec(ta)
-        call calcACE (ik, vxnl(:, :, ik),vxpsiir,vxpsimt)
+        call calcACE (ik, vxnl(:, :, ik),vxpsiir,vxpsimt,wmt)
         call timesec(tb)
         if (rank==0) write(*,*) 'calcACE :',tb-ta
 
@@ -387,6 +393,7 @@ else ! Use oepvnl
 
     deallocate(vxpsiir)
     deallocate(vxpsimt)
+    deallocate(wmt)
 !    deallocate(gntyyy)
 !    deallocate(gntyyyT)
 !    gntlyy, gntyyl, gntyly are kept as well and released in hybrids

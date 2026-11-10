@@ -4,7 +4,7 @@
 ! Copyright (C) 2021 D. Zavickis, A. Gulans
 !
 !
-Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
+Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt, wmt)
       use modrspace, only: rgrid_max_nmtpoints
       use modbess, only: nfit, zbessi,zbessk,erfc_fit,zilmt,lambda
       use modinteg
@@ -16,7 +16,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       use mod_hybrids, only : gmax_pw_method
       USE OMP_LIB
       use mod_radial
-      use mod_fock_mt, only: fock_mt_on, fock_mt_selftest
+      use mod_fock_mt, only: fock_mt_on, fock_mt_selftest, nfmax, nfun, project_mt
   use precision, only:dp
 
       use poterf
@@ -32,6 +32,9 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       Complex (8), Intent (Out) :: vnlvv (nstsv, nstsv)
       Complex (8), Intent (Out) :: vxpsiirgk (ngkmax, nstsv)
       Complex (8), Intent (Out) :: vxpsimt (lmmaxvr, nrcmtmax, natmtot, nstsv)
+! WP3: wmt(f, ias, n) = int u_f(r) [vxpsimt(:,:,ias,n)]_lm(f)(r) r^2 dr (integ_v weights),
+! f in the order of wf%mtordered; filled only when fock_mt_on
+      Complex (8), Intent (Out) :: wmt (max(1,nfmax), natmtot, nstsv)
 
 ! local variables
       Integer :: ngknr, ik, jk, ist1, ist2, ist3
@@ -91,6 +94,9 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       complex(8), Allocatable :: vxpbtot(:,:,:,:) !lmmaxvr,maxpbf2,natmtot,nstsv
 
       type (WFType) :: wf1,wf2,prod,pot
+! WP3 step 3.1: MT part of vnlvv from wmt, and its comparison with the zfinpmt path
+      Complex (8), Allocatable :: vnlmt_w (:, :)
+      Real (8) :: dmt(2), dvv(2)
   integer :: ik_test,ist3_test,jk_test,ist2_test
 ! external functions
       Complex (8) zfinp, zfmtinp, zfinpir, zfinpmt
@@ -183,6 +189,7 @@ Subroutine FockExchange (ikp, q0corr, vnlvv, vxpsiirgk, vxpsimt)
       zn (:) = 0.d0
       vxpsiirgk (:, :) = 0.d0
       vxpsimt (:, :, :, :) = 0.d0
+      wmt (:, :, :) = 0.d0
       vnlvv (:, :) = 0.d0
 ! calculate the wavefunctions for all states for the input k-point
 
@@ -833,6 +840,36 @@ if (print_times) write(*,*) 'vcv :',tb-ta
 
 
 
+! WP3 step 3.1: project vxpsimt onto the sphere functions, and the MT part of vnlvv
+! from the coefficients: vnlmt_w(ist1,ist3) = sum_{ias,f} conj(C(f,ist1,ias)) wmt(f,ias,ist3),
+! C = wf1%mtordered. Same as zfinpmt below except for the radial quadrature (integ_v
+! weights here, fderiv splines there). The q0corr term (singularity = exc) is not on
+! this path (fock_mt_on requires exc0d).
+      if (fock_mt_on) then
+        call timesec(ta)
+        Do ist3 = 1, nstsv
+          Do is = 1, nspecies
+            Do ia = 1, natoms (is)
+              ias = idxas (ia, is)
+              call project_mt(is, ias, vxpsimt(:,:,ias,ist3), wmt(:,ias,ist3))
+            End Do
+          End Do
+        End Do
+        Allocate (vnlmt_w(nstsv, nstsv))
+        vnlmt_w (:, :) = zzero
+        Do is = 1, nspecies
+          Do ia = 1, natoms (is)
+            ias = idxas (ia, is)
+            Call zgemm ('C', 'N', nstsv, nstsv, nfun(is), zone, wf1%mtordered(1,1,ias), &
+             & size(wf1%mtordered,1), wmt(1,ias,1), size(wmt,1)*natmtot, zone, vnlmt_w, nstsv)
+          End Do
+        End Do
+        call timesec(tb)
+        if (print_times) write(*,*) 'fock_mt_proj :', tb-ta
+        dmt = 0.d0
+        dvv = 0.d0
+      endif
+
       Allocate (wf1ir(ngrtot))
       Allocate (vxpsiirtmp(ngrtot))
 call timesec(ta)
@@ -873,7 +910,15 @@ call timesec(ta)
             End Do
             ztmt = zfinpmt (.True., wf1%mtrlm(:,:,:,ist1),vxpsimt(:,:,:,ist3))
 
-            vnlvv (ist1, ist3) = vnlvv (ist1, ist3) - ztmt - ztir
+            if (fock_mt_on) then
+              ! WP3 step 3.1: the coefficient path is used; the old value only for comparison
+              dmt(1) = max(dmt(1), abs(vnlmt_w(ist1,ist3) - ztmt))
+              dmt(2) = max(dmt(2), abs(ztmt))
+              dvv(2) = max(dvv(2), abs(ztmt + ztir))
+              vnlvv (ist1, ist3) = vnlvv (ist1, ist3) - vnlmt_w(ist1,ist3) - ztir
+            else
+              vnlvv (ist1, ist3) = vnlvv (ist1, ist3) - ztmt - ztir
+            endif
 
          End Do ! ist3
       End Do ! ist1
@@ -881,6 +926,13 @@ call timesec(ta)
 call timesec(tb)
 
 if (print_times) write(*,*) 'Matrix :',tb-ta
+      if (fock_mt_on) then
+        ! the IR part is common to both, so max|new - old| of vnlvv equals that of its MT part
+        dvv(1) = dmt(1)
+        write(*,'("fock_mt 3.1 ikp",i5,": vnlvv MT part rel. diff = ",es10.2,", vnlvv rel. diff = ",es10.2,", max|old MT| = ",es10.2)') &
+          ikp, dmt(1)/max(dmt(2),tiny(1d0)), dvv(1)/max(dvv(2),tiny(1d0)), dmt(2)
+        Deallocate (vnlmt_w)
+      endif
 
 if (.false.) then
       write(*,*)"element(1,1)",dble(vnlvv(1,1)),",",imag(vnlvv(1,1))
