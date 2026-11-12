@@ -286,10 +286,13 @@ call timesec(ta)
             Allocate (evalfv(nstfv, nspnfv))
             Allocate (evecfv(nmatmax, nstfv, nspnfv))
             Allocate (evecsv(nstsv, nstsv))
-            if (iscl.le.1) then
-              evecfv=0d0
-            elseif (input%groundstate%solver%type.eq.'Davidson') then
+            ! Davidson: warm start from EVECFV.OUT also at the first inner
+            ! iteration of a hybrid iteration (task 7); cold start otherwise
+            if ((input%groundstate%solver%type.eq.'Davidson') .and. &
+            &   ((iscl.gt.1) .or. (task.eq.7))) then
               Call getevecfv (vkl(:, ik), vgkl(:, :, :, ik), evecfv)
+            elseif (iscl.le.1) then
+              evecfv=0d0
             endif
 !! TIME - seceqn does not belong to IO
 
