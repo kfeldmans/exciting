@@ -841,7 +841,10 @@ contains
     integer, allocatable :: lm_l(:) !! l of each lm
     complex(dp), parameter :: zone = cmplx(1._dp,0._dp,kind=dp), zzero = cmplx(0._dp,0._dp,kind=dp)
     integer :: lmax,Nx, igk,l,ias, m,lm,ibs,ist,n,is, ia, ia_s, ia_e, nst_out,ngk_ik, nat_max, nat_s, ib
+    real(dp) :: tp0, tp1, tp2 !! phase timers (thesis ch6 evidence)
+    real(dp) :: t_ylm, t_bes, t_kc, t_gemm, t_perm
 
+    t_ylm = 0._dp; t_bes = 0._dp; t_kc = 0._dp; t_gemm = 0._dp; t_perm = 0._dp
     lmax = size(gSVDb_vec)-1
     n = gSVDb_vec(1)%n
     nst_out = size(B_ik, 1)
@@ -867,6 +870,7 @@ contains
     
     allocate(Bt(nst_out,nat_max,n,lmmax_vFeld))
 
+    call timesec(tp0)
     !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(igk,ylm)
     allocate(ylm(lmmax_vFeld))
     !$OMP DO
@@ -877,10 +881,13 @@ contains
     !$OMP END DO
     deallocate(ylm)
     !$OMP END PARALLEL
+    call timesec(tp1)
+    t_ylm = tp1 - tp0
 
 
     do is = 1, nspecies
       nat_s = natoms(is)
+      call timesec(tp0)
 !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(igk,lm,ib,l,ia,ist,jlx,jx)
       ! Project j_l(|G+k| R_s x) onto SVD basis.
       allocate(jlx(0:lmax,gSVDb_vec(1)%Nx) &
@@ -894,6 +901,9 @@ contains
         end do
       end do
       !$OMP END DO
+      !$OMP MASTER
+      call timesec(tp1)
+      !$OMP END MASTER
       deallocate(jlx,jx)
 
       ! K^s(g,b,lm)=4pi * i^l * c_{g,lb) conjg(Y_{g,lm})
@@ -914,9 +924,14 @@ contains
       end do
       !$OMP END DO
       !$OMP END PARALLEL
+      call timesec(tp2)
+      t_bes = t_bes + (tp1 - tp0)
+      t_kc = t_kc + (tp2 - tp1)
       ! Bt((nu,a),(b,lm))=sum_g Chat(g,(nu,a)) * K^s(g,(b,lm))
       call zgemm('T','N',nst_out*nat_s, n * lmmax_vFeld, ngk_ik, zone, Chat, ngk_ik, Ks, ngk_ik &
                 ,zzero, Bt, nst_out * nat_max)
+      call timesec(tp0)
+      t_gemm = t_gemm + (tp0 - tp2)
       
       !$OMP PARALLEL DO COLLAPSE(2) DEFAULT(SHARED) PRIVATE(lm,ib,ia)
       do lm = 1, lmmax_vFeld
@@ -927,8 +942,15 @@ contains
         end do
       end do
       !$OMP END PARALLEL DO
+      call timesec(tp1)
+      t_perm = t_perm + (tp1 - tp0)
     end do
-    
+    write(*,*) "B v5 ylm: ", t_ylm
+    write(*,*) "B v5 Bessel proj: ", t_bes
+    write(*,*) "B v5 K and Chat: ", t_kc
+    write(*,*) "B v5 zgemm: ", t_gemm
+    write(*,*) "B v5 permute: ", t_perm
+
   end subroutine psi_sphr_SVDb_v5
 
   subroutine ensure_shape4(a,n1,n2,n3,n4)
